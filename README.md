@@ -39,7 +39,7 @@ Example `profile.json` (all fields optional; missing ones are reported, not gues
  "filing_status": "single", "annual_gross_income": 100000, "traditional_401k_annual": 6000,
  "debts": [{"name": "card", "balance": 3000, "apr_pct": 24, "min_payment": 90}]}
 ```
-Tax estimates (2026 tables, IRS Rev. Proc. 2025-32 and Notice 2025-67) cover federal ordinary income tax, standard/itemized deduction, 401(k) catch-ups, traditional IRA deduction and Roth IRA phase-outs. They exclude FICA, state tax, credits, capital gains, AMT and HSAs. Gross income must come from you, since bank deposits are after-tax. Add a new year by extending `tax.DATA`.
+Tax estimates (2026 tables, IRS Rev. Proc. 2025-32 and Notice 2025-67) cover federal ordinary income tax, standard/itemized deduction, 401(k) catch-ups, traditional IRA deduction and Roth IRA phase-outs. They include employee FICA and Arkansas income tax (2026: 3.7% top rate, DFA formula; set `"state": "none"` to skip). They exclude other states, credits, capital gains, AMT and HSAs. The snapshot compares estimated take-home to your actual bank deposits. Gross income must come from you, since bank deposits are after-tax. Add a new year by extending `tax.DATA`.
 
 Planning results are computed in code and given to the model as facts, in today's dollars. It refuses any non-loopback `OLLAMA_HOST`.
 

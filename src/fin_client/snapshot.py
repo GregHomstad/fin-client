@@ -44,6 +44,15 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
     fixed = recurring.detect(txns)
     fixed_out = -sum((r.monthly_cost for r in fixed if r.amount < 0), Decimal(0))
 
+    plan = planning.build(profile or {}, _f(avg["avg_net"]), _f(essential))
+    recon = None
+    t = plan.get("tax")
+    if t and "error" not in t:
+        est = t["estimated_monthly_take_home"]
+        recon = {"estimated_monthly_take_home": est, "bank_income_per_month": _f(income),
+                 "difference": round(_f(income) - est, 2),
+                 "note": "Bank income may include non-pay deposits; a large gap suggests missing deductions "
+                         "(e.g. health premiums, other withholding) or wrong gross income in profile.json."}
     return {
         "period": {"first_month": months[0].month, "last_month": months[-1].month,
                    "months_in_averages": int(n)},
@@ -62,7 +71,8 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
             {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),
              "net": _f(m.net)} for m in months
         ],
-        "planning": planning.build(profile or {}, _f(avg["avg_net"]), _f(essential)),
+        "planning": plan,
+        "paycheck_reconciliation": recon,
         "user_profile": profile or {},
         "notes": ["Internal transfers are excluded from income and spending.",
                   "First and last months are excluded from averages when 3+ months exist."],
