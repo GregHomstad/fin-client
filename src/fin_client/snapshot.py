@@ -1,0 +1,68 @@
+"""Build the advisor's grounding context: computed aggregates only, never raw rows.
+
+Merchant names appear only for detected recurring commitments. Everything else is
+category-level totals. Optional user-supplied facts come from profile.json.
+"""
+import json
+from decimal import Decimal
+
+from fin_client import analytics, recurring
+from fin_client.categorize import Rules
+from fin_client.models import Transaction
+from fin_client.paths import data_dir
+
+ESSENTIALS = {"Housing", "Utilities", "Groceries", "Insurance", "Health", "Transportation"}
+Q = Decimal("0.01")
+
+
+def _f(x: Decimal) -> float:
+    return float(x.quantize(Q))
+
+
+def load_profile() -> dict:
+    """User-stated facts (age, debts, balances, goals) from profile.json in the data dir."""
+    path = data_dir() / "profile.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | None = None) -> dict:
+    months = analytics.cashflow(txns, rules)
+    if not months:
+        return {"error": "No transactions imported yet."}
+    full = months[1:-1] if len(months) >= 3 else months
+    n = Decimal(len(full))
+    avg = analytics.averages(months)
+
+    cat_totals: dict[str, Decimal] = {}
+    for m in full:
+        for c, v in m.by_category.items():
+            cat_totals[c] = cat_totals.get(c, Decimal(0)) + v
+    cat_avg = {c: _f(v / n) for c, v in sorted(cat_totals.items(), key=lambda kv: -kv[1])}
+
+    essential = sum((v for c, v in cat_totals.items() if c in ESSENTIALS), Decimal(0)) / n
+    income = avg["avg_income"]
+    fixed = recurring.detect(txns)
+    fixed_out = -sum((r.monthly_cost for r in fixed if r.amount < 0), Decimal(0))
+
+    return {
+        "period": {"first_month": months[0].month, "last_month": months[-1].month,
+                   "months_in_averages": int(n)},
+        "monthly_averages": {
+            "income": _f(income), "spending": _f(avg["avg_spending"]), "net": _f(avg["avg_net"]),
+            "savings_rate_pct": _f(avg["avg_net"] / income * 100) if income > 0 else None,
+        },
+        "average_spending_by_category": cat_avg,
+        "essential_spending_per_month": _f(essential),
+        "recurring_outflows_per_month": _f(fixed_out),
+        "recurring_outflows_pct_of_income": _f(fixed_out / income * 100) if income > 0 else None,
+        "recurring_items": [
+            {"merchant": r.merchant, "cadence": r.cadence, "amount": _f(r.amount)} for r in fixed
+        ],
+        "monthly_history": [
+            {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),
+             "net": _f(m.net)} for m in months
+        ],
+        "user_profile": profile or {},
+        "notes": ["Internal transfers are excluded from income and spending.",
+                  "First and last months are excluded from averages when 3+ months exist."],
+    }

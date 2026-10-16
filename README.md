@@ -20,6 +20,15 @@ git config core.hooksPath .githooks
 5. Advisor chat via Ollama, grounded in computed numbers (not raw rows)
 6. Claude Code skill for developing/running the CLI (never reads real data)
 
+## Usage
+```bash
+fin-client import statement.csv      # or .ofx / .qfx
+fin-client cashflow | categories | recurring
+fin-client advise --show-context     # exactly what the model would see; no model call
+fin-client advise [--model llama3:8b]
+```
+The advisor sees only computed aggregates (category averages, savings rate, recurring commitments), never raw transactions. Add facts it can't infer (age, debts with APRs, balances, goals) to `profile.json` in your data directory (`fin-client where`). It refuses any non-loopback `OLLAMA_HOST`.
+
 ## Develop
 ```bash
 python -m venv .venv && .venv\Scripts\activate
