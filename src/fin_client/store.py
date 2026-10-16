@@ -1,6 +1,7 @@
 """Local SQLite store, kept in the private data dir (never in the repo)."""
 import sqlite3
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 
 from fin_client.models import Transaction
@@ -26,6 +27,15 @@ def add(conn: sqlite3.Connection, txns: list[Transaction]) -> int:
     )
     conn.commit()
     return conn.total_changes - before
+
+
+def all_transactions(conn: sqlite3.Connection) -> list[Transaction]:
+    return [
+        Transaction(date.fromisoformat(d), desc, Decimal(a), acct)
+        for d, desc, a, acct in conn.execute(
+            "SELECT date, description, amount, account FROM transactions ORDER BY date"
+        )
+    ]
 
 
 def monthly_summary(conn: sqlite3.Connection) -> dict[str, dict[str, Decimal]]:
