@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("plan", help="Debt payoff, emergency fund and retirement calculations (no model)")
     tx = sub.add_parser("tax", help="Federal income tax estimate and 401(k)/IRA what-ifs from profile.json (no data needed)")
     tx.add_argument("--year", type=int, default=2026)
+    rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
+    rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
     adv = sub.add_parser("advise", help="Chat with the local Ollama advisor about your finances")
     adv.add_argument("--model", default=os.environ.get("FIN_CLIENT_MODEL", DEFAULT_MODEL))
     adv.add_argument("--show-context", action="store_true",
@@ -47,6 +49,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "report":
+        from datetime import date
+
+        from fin_client import report
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
+        if "error" in snap:
+            print(snap["error"], file=sys.stderr)
+            return 1
+        out = args.out or data_dir() / "reports" / f"fin-client-report-{date.today():%Y-%m-%d}.pdf"
+        try:
+            print(f"Wrote {report.build_pdf(snap, out)}")
+        except (RuntimeError, OSError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     elif args.cmd == "plan":
         snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
         if "error" in snap:

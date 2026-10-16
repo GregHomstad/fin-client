@@ -26,6 +26,7 @@ fin-client import statement.csv      # or .ofx / .qfx
 fin-client cashflow | categories | recurring
 fin-client plan                      # debt payoff, emergency fund, retirement (pure math, no model)
 fin-client tax                       # federal tax estimate + 401(k)/IRA what-ifs (profile.json only)
+fin-client report                    # PDF to <data dir>eports (aggregates only; refuses paths inside the repo)
 fin-client advise --show-context     # exactly what the model would see; no model call
 fin-client advise [--model llama3:8b]
 ```
