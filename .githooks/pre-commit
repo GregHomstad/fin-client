@@ -1,0 +1,13 @@
+#!/bin/sh
+# Block commits that look like they contain real financial data.
+bad=$(git diff --cached --name-only --diff-filter=ACM | grep -Ei '\.(csv|ofx|qfx|qif|pdf|db|sqlite3?|xlsx)$' | grep -Ev '^samples/synthetic_.*\.csv$')
+if [ -n "$bad" ]; then
+  echo "BLOCKED: data-like files staged (only samples/synthetic_*.csv allowed):"
+  echo "$bad"
+  exit 1
+fi
+if git diff --cached -U0 | grep -E '^\+' | grep -Eq '\b[0-9]{9,17}\b'; then
+  echo "BLOCKED: staged change contains a 9-17 digit number (possible account/routing number). Review with 'git diff --cached'."
+  exit 1
+fi
+exit 0

@@ -1,0 +1,27 @@
+# --- PRIVACY: never commit real financial data ---
+data/
+private/
+*.csv
+*.ofx
+*.qfx
+*.qif
+*.pdf
+*.db
+*.sqlite
+*.sqlite3
+*.xlsx
+*.json.enc
+.env
+.env.*
+# Allow synthetic fixtures only
+!samples/
+!samples/synthetic_*.csv
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
