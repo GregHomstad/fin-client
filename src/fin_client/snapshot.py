@@ -6,7 +6,7 @@ category-level totals. Optional user-supplied facts come from profile.json.
 import json
 from decimal import Decimal
 
-from fin_client import analytics, recurring
+from fin_client import analytics, planning, recurring
 from fin_client.categorize import Rules
 from fin_client.models import Transaction
 from fin_client.paths import data_dir
@@ -62,6 +62,7 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
             {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),
              "net": _f(m.net)} for m in months
         ],
+        "planning": planning.build(profile or {}, _f(avg["avg_net"]), _f(essential)),
         "user_profile": profile or {},
         "notes": ["Internal transfers are excluded from income and spending.",
                   "First and last months are excluded from averages when 3+ months exist."],

@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("categories", help="Spending by category per month, plus uncategorized merchants")
     sub.add_parser("recurring", help="Detected recurring charges and deposits")
     sub.add_parser("cashflow", help="Monthly cash flow, savings rate and averages")
+    sub.add_parser("plan", help="Debt payoff, emergency fund and retirement calculations (no model)")
     adv = sub.add_parser("advise", help="Chat with the local Ollama advisor about your finances")
     adv.add_argument("--model", default=os.environ.get("FIN_CLIENT_MODEL", DEFAULT_MODEL))
     adv.add_argument("--show-context", action="store_true",
@@ -40,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "plan":
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
+        if "error" in snap:
+            print(snap["error"], file=sys.stderr)
+            return 1
+        print(json.dumps(snap["planning"], indent=1))
     elif args.cmd == "advise":
         snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
         if args.show_context:
