@@ -1,8 +1,8 @@
 #!/bin/sh
 # Block commits that look like they contain real financial data.
-bad=$(git diff --cached --name-only --diff-filter=ACM | grep -Ei '\.(csv|ofx|qfx|qif|pdf|db|sqlite3?|xlsx)$' | grep -Ev '^samples/synthetic_.*\.csv$')
+bad=$(git diff --cached --name-only --diff-filter=ACM | grep -Ei '\.(csv|ofx|qfx|qif|pdf|db|sqlite3?|xlsx)$' | grep -Ev '^samples/synthetic_.*\.(csv|ofx)$')
 if [ -n "$bad" ]; then
-  echo "BLOCKED: data-like files staged (only samples/synthetic_*.csv allowed):"
+  echo "BLOCKED: data-like files staged (only samples/synthetic_* csv/ofx allowed):"
   echo "$bad"
   exit 1
 fi

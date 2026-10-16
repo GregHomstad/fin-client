@@ -16,6 +16,7 @@ private/
 # Allow synthetic fixtures only
 !samples/
 !samples/synthetic_*.csv
+!samples/synthetic_*.ofx
 
 # --- Python ---
 __pycache__/
