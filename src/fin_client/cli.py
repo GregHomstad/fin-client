@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from fin_client import analytics, recurring, snapshot, store
+from fin_client import analytics, recurring, snapshot, store, tax
 from fin_client.advisor import DEFAULT_MODEL, Advisor, ollama_url
 from fin_client.categorize import categorize, load_rules
 from fin_client.importers import import_file
@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("recurring", help="Detected recurring charges and deposits")
     sub.add_parser("cashflow", help="Monthly cash flow, savings rate and averages")
     sub.add_parser("plan", help="Debt payoff, emergency fund and retirement calculations (no model)")
+    tx = sub.add_parser("tax", help="Federal income tax estimate and 401(k)/IRA what-ifs from profile.json (no data needed)")
+    tx.add_argument("--year", type=int, default=2026)
     adv = sub.add_parser("advise", help="Chat with the local Ollama advisor about your finances")
     adv.add_argument("--model", default=os.environ.get("FIN_CLIENT_MODEL", DEFAULT_MODEL))
     adv.add_argument("--show-context", action="store_true",
@@ -32,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "where":
         print(data_dir())
         return 0
+    if args.cmd == "tax":
+        res = tax.estimate(snapshot.load_profile(), args.year)
+        print(json.dumps(res, indent=1))
+        return 1 if "error" in res else 0
     conn = store.connect()
     if args.cmd == "import":
         try:

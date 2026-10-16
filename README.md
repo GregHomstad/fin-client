@@ -25,6 +25,7 @@ git config core.hooksPath .githooks
 fin-client import statement.csv      # or .ofx / .qfx
 fin-client cashflow | categories | recurring
 fin-client plan                      # debt payoff, emergency fund, retirement (pure math, no model)
+fin-client tax                       # federal tax estimate + 401(k)/IRA what-ifs (profile.json only)
 fin-client advise --show-context     # exactly what the model would see; no model call
 fin-client advise [--model llama3:8b]
 ```
@@ -35,8 +36,11 @@ Example `profile.json` (all fields optional; missing ones are reported, not gues
 {"age": 30, "retire_age": 65, "cash_savings": 1500, "retirement_balance": 20000,
  "monthly_retirement_contribution": 300, "target_retirement_spending_monthly": 4000,
  "expected_return_pct": 6, "inflation_pct": 2.5,
+ "filing_status": "single", "annual_gross_income": 100000, "traditional_401k_annual": 6000,
  "debts": [{"name": "card", "balance": 3000, "apr_pct": 24, "min_payment": 90}]}
 ```
+Tax estimates (2026 tables, IRS Rev. Proc. 2025-32 and Notice 2025-67) cover federal ordinary income tax, standard/itemized deduction, 401(k) catch-ups, traditional IRA deduction and Roth IRA phase-outs. They exclude FICA, state tax, credits, capital gains, AMT and HSAs. Gross income must come from you, since bank deposits are after-tax. Add a new year by extending `tax.DATA`.
+
 Planning results are computed in code and given to the model as facts, in today's dollars. It refuses any non-loopback `OLLAMA_HOST`.
 
 ## Develop

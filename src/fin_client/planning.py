@@ -5,6 +5,8 @@ cannot be computed because an input is missing is listed in `missing_inputs`.
 """
 from decimal import ROUND_HALF_UP, Decimal
 
+from fin_client import tax
+
 CENT = Decimal("0.01")
 MAX_MONTHS = 1200
 DEFAULT_RETURN_PCT = 6.0  # nominal long-run balanced-portfolio assumption
@@ -200,5 +202,11 @@ def build(profile: dict, avg_net: float | None, essential_monthly: float) -> dic
         for k in ("retirement_balance", "monthly_retirement_contribution", "target_retirement_spending_monthly"):
             if k not in profile:
                 missing.append(f"{k} (retirement projection is more useful with it)")
+    if "filing_status" in profile and "annual_gross_income" in profile:
+        plan["tax"] = tax.estimate(profile)
+    else:
+        missing.append("tax inputs: filing_status (single|mfj|hoh|mfs) and annual_gross_income "
+                       "(pre-tax; bank deposits are after-tax). Optional: traditional_401k_annual, roth_401k_annual, "
+                       "traditional_ira_annual, roth_ira_annual, itemized_deductions")
     plan["missing_inputs"] = missing
     return plan
