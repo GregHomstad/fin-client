@@ -1,0 +1,449 @@
+/* Ledger dashboard. No frameworks, no third-party requests. All DOM text is set via textContent. */
+"use strict";
+
+const $ = (s, el = document) => el.querySelector(s);
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function h(tag, props, ...kids) {
+  const el = tag === "svg" || props?.svg ? document.createElementNS(SVGNS, tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "svg" || v == null || v === false) continue;
+    if (k === "class") el.setAttribute("class", v);
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+    else if (k === "value") el.value = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  return el;
+}
+const sv = (tag, props, ...kids) => h(tag, { ...props, svg: true }, ...kids);
+
+const usd0 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const usd2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+const money = (n, d = 0) => (n == null ? "—" : (d ? usd2 : usd0).format(n));
+const pct = (n, d = 1) => (n == null ? "—" : `${n.toFixed(d)}%`);
+const monthLabel = (m) => new Date(m + "-15").toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+async function api(path, { method = "GET", json, body, raw } = {}) {
+  const headers = method === "GET" ? {} : { "X-Fin-Client": "1" };
+  if (json !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, { method, headers, body: json !== undefined ? JSON.stringify(json) : body });
+  if (raw) return res;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function toast(msg, isErr = false) {
+  const t = h("div", { class: "toast" + (isErr ? " err" : ""), role: "status" }, msg);
+  document.body.append(t);
+  setTimeout(() => t.remove(), isErr ? 6000 : 2800);
+}
+
+/* ---------- tooltip ---------- */
+const tip = $("#tip");
+function showTip(ev, lines) {
+  tip.replaceChildren(...lines.map((l, i) => h("div", i ? {} : { style: { fontWeight: 600 } }, l)));
+  tip.hidden = false;
+  const pad = 14, w = tip.offsetWidth, hgt = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + hgt > innerHeight - 8) y = ev.clientY - hgt - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => (tip.hidden = true);
+const hover = (el, linesFn) => {
+  el.addEventListener("pointermove", (e) => showTip(e, linesFn()));
+  el.addEventListener("pointerleave", hideTip);
+  return el;
+};
+
+/* ---------- state ---------- */
+let OV = null; // /api/overview
+const loadOverview = async () => (OV = await api("/api/overview"));
+
+/* ---------- charts ---------- */
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v)), f = v / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+
+function monthlyBars(months) {
+  const W = 720, H = 270, L = 52, R = 10, T = 14, B = 30;
+  const max = niceMax(Math.max(...months.flatMap((m) => [m.income, m.spending]), 1));
+  const iw = W - L - R, ih = H - T - B, step = iw / months.length, bw = Math.min(28, step * 0.32);
+  const y = (v) => T + ih - (v / max) * ih;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Income and spending by month", style: { width: "100%", height: "auto" } });
+  const g = sv("g", { class: "grid" });
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i;
+    g.append(sv("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }), sv("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, v >= 1000 ? `$${v / 1000}k` : `$${v}`));
+  }
+  svg.append(g);
+  months.forEach((m, i) => {
+    const cx = L + step * i + step / 2;
+    const mk = (val, x, color, label) => sv("path", {
+      d: `M${x},${y(0)} V${y(val) + 4} a4,4 0 0 1 4,-4 h${bw - 8} a4,4 0 0 1 4,4 V${y(0)} Z`,
+      fill: val > 0 ? color : "none", style: { cursor: "default" }, "data-l": label,
+    });
+    const inc = mk(m.income, cx - bw - 1, "var(--s1)", "Income"), sp = mk(m.spending, cx + 1, "var(--s2)", "Spending");
+    const hit = sv("rect", { x: cx - step / 2, y: T, width: step, height: ih, fill: "transparent" });
+    hover(hit, () => [monthLabel(m.month), `Income ${money(m.income)}`, `Spending ${money(m.spending)}`, `Net ${money(m.net)}`, `Saved ${pct(m.savings_rate)}`]);
+    svg.append(inc, sp, hit, sv("text", { x: cx, y: H - 10, "text-anchor": "middle" }, monthLabel(m.month)));
+  });
+  svg.append(sv("line", { class: "axis", x1: L, x2: W - R, y1: y(0), y2: y(0) }));
+  return svg;
+}
+
+function catBars(entries, onPick) {
+  const max = Math.max(...entries.map((e) => e[1]), 1);
+  return h("div", {}, entries.map(([name, v]) =>
+    hover(h("div", { class: "bar-row", role: "link", tabindex: 0, onclick: () => onPick(name), onkeydown: (e) => e.key === "Enter" && onPick(name) },
+      h("span", { class: "lbl", title: name }, name),
+      h("span", { class: "track" }, h("i", { style: { width: `${(v / max) * 100}%` } })),
+      h("span", { class: "num", style: { textAlign: "right" } }, money(v))), () => [name, money(v) + " / month", "Click to see transactions"])));
+}
+
+const SEQ = ["--seq-1", "--seq-2", "--seq-3", "--seq-4", "--seq-5", "--seq-6", "--seq-7"];
+function heat(months, onPick) {
+  const totals = {};
+  months.forEach((m) => Object.entries(m.by_category).forEach(([c, v]) => (totals[c] = (totals[c] || 0) + v)));
+  const cats = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 14).map((e) => e[0]);
+  const max = Math.max(...months.flatMap((m) => cats.map((c) => m.by_category[c] || 0)), 1);
+  return h("div", { class: "scroll" }, h("table", { class: "heat" },
+    h("thead", {}, h("tr", {}, h("th", {}, "Category"), months.map((m) => h("th", { class: "r" }, monthLabel(m.month))), h("th", { class: "r" }, "Total"))),
+    h("tbody", {}, cats.map((c) => h("tr", {},
+      h("td", {}, h("a", { href: `#/transactions?category=${encodeURIComponent(c)}` }, c)),
+      months.map((m) => {
+        const v = m.by_category[c] || 0, step = v ? Math.min(6, Math.floor((v / max) * 6.99)) : -1;
+        return hover(h("td", { class: "c num", style: v ? { background: `var(${SEQ[step]})`, color: step >= 3 ? "#fff" : "#0b0b0b" } : {}, onclick: () => onPick(c, m.month) }, v ? money(v) : ""),
+          () => [c, monthLabel(m.month), money(v)]);
+      }),
+      h("td", { class: "r num" }, money(totals[c])))))));
+}
+
+/* ---------- shared bits ---------- */
+const head = (title, sub, ...actions) =>
+  h("div", { class: "head" }, h("div", {}, h("div", { class: "eyebrow" }, "Ledger"), h("h1", {}, title), sub && h("p", {}, sub)), h("div", { class: "form-row", style: { flex: "0 0 auto" } }, actions));
+const card = (title, ...body) => h("section", { class: "card" }, title && h("header", {}, h("h3", {}, title)), body);
+const emptyState = (msg) => h("div", { class: "note" }, msg);
+function stat(label, value, sub, cls = "") {
+  return h("div", { class: "card stat" }, h("div", { class: "eyebrow" }, label), h("div", { class: "v num " + cls }, value), h("div", { class: "s" }, sub));
+}
+
+/* ---------- views ---------- */
+function viewOverview() {
+  const o = OV, s = o.snapshot, nw = o.net_worth;
+  const root = h("div", {});
+  if (!o.has_data) {
+    root.append(head("Welcome", "Start by importing a bank or credit-card export."), card("Nothing here yet", emptyState("Open Accounts, choose your CSV/OFX/QFX exports, name the account and import."), h("p", {}, h("a", { class: "btn accent", href: "#/accounts" }, "Go to Accounts"))));
+    return root;
+  }
+  const totalAssets = nw.assets, totalLiab = nw.liabilities, denom = totalAssets + totalLiab || 1;
+  root.append(head("Overview", `${s ? `${monthLabel(s.period.first_month)} – ${monthLabel(s.period.last_month)} · ` : ""}${o.accounts.length} accounts`));
+
+  const hero = h("section", { class: "card hero" },
+    h("div", { class: "eyebrow" }, "Net worth"),
+    h("div", { class: "big num " + (nw.net_worth < 0 ? "bad" : "") }, nw.missing_balances.length === o.accounts.length ? "—" : money(nw.net_worth)),
+    h("div", { class: "split", "aria-hidden": "true" }, h("i", { style: { width: `${(totalAssets / denom) * 100}%`, background: "var(--s1)" } }), h("i", { style: { width: `${(totalLiab / denom) * 100}%`, background: "var(--s2)" } })),
+    h("div", { class: "legend" }, h("span", { style: { "--c": "var(--s1)" } }, `Assets ${money(totalAssets)}`), h("span", { style: { "--c": "var(--s2)" } }, `Liabilities ${money(totalLiab)}`)),
+    nw.missing_balances.length ? h("p", { class: "fine" }, `Balances missing for: ${nw.missing_balances.join(", ")}. `, h("a", { href: "#/accounts" }, "Add them")) : null);
+
+  const tiles = [];
+  if (s) {
+    const a = s.monthly_averages, rec = s.paycheck_reconciliation;
+    tiles.push(stat("Avg monthly income", money(a.income), "bank deposits, transfers excluded"),
+      stat("Avg monthly spending", money(a.spending), `${money(s.essential_spending_per_month)} essentials`),
+      stat("Savings rate", pct(a.savings_rate_pct), `${money(a.net)} / month left over`, a.net < 0 ? "bad" : "good"),
+      stat("Fixed commitments", money(s.recurring_outflows_per_month), pct(s.recurring_outflows_pct_of_income, 0) + " of income"));
+    if (rec) tiles.push(stat("Paycheck check", money(rec.difference), `deposits vs ${money(rec.estimated_monthly_take_home)} estimated take-home`));
+  }
+  root.append(h("div", { class: "grid cols-2" }, hero, h("div", { class: "grid cols-2", style: { gridTemplateColumns: "repeat(2,1fr)" } }, tiles)));
+
+  const attention = [];
+  if (o.uncategorized.merchants) attention.push(h("li", {}, h("span", {}, `${o.uncategorized.merchants} merchants (${money(o.uncategorized.spending)}) are uncategorized`), h("a", { href: "#/transactions?category=Uncategorized" }, "Fix")));
+  if (nw.missing_balances.length) attention.push(h("li", {}, h("span", {}, `${nw.missing_balances.length} accounts have no balance yet`), h("a", { href: "#/accounts" }, "Add")));
+  if (s?.planning.missing_inputs.length) attention.push(h("li", {}, h("span", {}, `${s.planning.missing_inputs.length} profile inputs missing for tax and retirement plans`), h("a", { href: "#/plan" }, "Add")));
+
+  root.append(h("div", { class: "grid cols-2", style: { marginTop: "1rem" } },
+    card("Income vs spending", o.months.length ? monthlyBars(o.months) : emptyState("No months yet"),
+      h("div", { class: "legend", style: { marginTop: ".4rem" } }, h("span", { style: { "--c": "var(--s1)" } }, "Income"), h("span", { style: { "--c": "var(--s2)" } }, "Spending"))),
+    card("Where it goes", s ? catBars(Object.entries(s.average_spending_by_category).slice(0, 9), (c) => (location.hash = `#/transactions?category=${encodeURIComponent(c)}`)) : null)));
+
+  root.append(h("div", { class: "grid cols-2", style: { marginTop: "1rem" } },
+    card("Needs attention", attention.length ? h("ul", { class: "list" }, attention) : h("p", { class: "muted" }, "All caught up.")),
+    card("Coming up", o.recurring.length ? h("ul", { class: "list" }, [...o.recurring].sort((a, b) => a.next.localeCompare(b.next)).slice(0, 6).map((r) =>
+      h("li", {}, h("span", {}, cap(r.merchant.toLowerCase()), " ", h("span", { class: "muted" }, `· ~${r.next}`)), h("span", { class: "num " + (r.amount > 0 ? "good" : "") }, money(r.amount, 2))))) : h("p", { class: "muted" }, "No recurring items detected yet."))));
+  return root;
+}
+
+function accountRow(a) {
+  const bal = h("input", { type: "text", inputmode: "decimal", value: a.balance ?? "", placeholder: "balance", "aria-label": `${a.name} balance` });
+  const apr = h("input", { type: "text", inputmode: "decimal", value: a.apr_pct ?? "", placeholder: "APR %", "aria-label": `${a.name} APR` });
+  const min = h("input", { type: "text", inputmode: "decimal", value: a.min_payment ?? "", placeholder: "min pmt", "aria-label": `${a.name} minimum payment` });
+  const type = h("select", { "aria-label": `${a.name} type` }, OV.types.map((t) => h("option", { value: t.value, selected: t.value === a.type }, t.label)));
+  const save = h("button", { class: "btn small", type: "button", onclick: async () => {
+    try {
+      await api("/api/accounts", { method: "POST", json: { name: a.name, type: type.value, balance: bal.value, apr_pct: apr.value, min_payment: min.value, notes: a.notes } });
+      await loadOverview(); toast("Saved " + a.name); render();
+    } catch (e) { toast(e.message, true); }
+  } }, "Save");
+  const debt = a.kind === "liability";
+  return h("tr", {},
+    h("td", {}, h("div", { style: { fontWeight: 600 } }, a.name), h("div", { class: "muted", style: { fontSize: ".78rem" } }, a.transactions ? `${a.transactions} txns · ${a.first_date} → ${a.last_date}` : "no transactions")),
+    h("td", {}, type), h("td", {}, bal), h("td", {}, debt ? apr : ""), h("td", {}, debt ? min : ""), h("td", { class: "r" }, save));
+}
+
+function viewAccounts() {
+  const o = OV, root = h("div", {}), nw = o.net_worth;
+  root.append(head("Accounts", "Checking, savings, credit cards, loans and investments in one place."));
+
+  const name = h("input", { type: "text", list: "acct-names", placeholder: "e.g. Visa ending in…", "aria-label": "Account name" });
+  const type = h("select", { "aria-label": "Account type" }, o.types.map((t) => h("option", { value: t.value }, t.label)));
+  const files = h("input", { type: "file", multiple: true, accept: ".csv,.ofx,.qfx", "aria-label": "Bank export files" });
+  const out = h("div", { class: "fine" });
+  const go = h("button", { class: "btn accent", type: "button" }, "Import");
+  go.onclick = async () => {
+    if (!files.files.length) return toast("Choose one or more files first", true);
+    go.disabled = true; out.textContent = "";
+    for (const f of files.files) {
+      try {
+        const q = new URLSearchParams({ filename: f.name, account: name.value.trim(), type: type.value });
+        const r = await api("/api/import?" + q, { method: "POST", body: await f.arrayBuffer() });
+        out.append(h("div", {}, `${f.name}: ${r.parsed} rows, ${r.added} new`));
+      } catch (e) { out.append(h("div", { class: "bad" }, `${f.name}: ${e.message}`)); }
+    }
+    go.disabled = false; files.value = "";
+    await loadOverview(); toast("Import finished"); render(out);
+  };
+  const drop = h("div", { class: "drop" },
+    h("div", { class: "eyebrow", style: { marginBottom: ".6rem" } }, "Import statements (CSV, OFX, QFX)"),
+    h("div", { class: "form-row" },
+      h("label", { class: "f" }, "Account name", name, h("datalist", { id: "acct-names" }, o.accounts.map((a) => h("option", { value: a.name })))),
+      h("label", { class: "f" }, "Type (for new accounts)", type), h("label", { class: "f", style: { flex: "2 1 220px" } }, "Files", files), go),
+    h("p", { class: "fine" }, "Leave the name empty if your file has an Account column. Credit-card payments you make from checking are matched to the card payment so they are not counted twice."), out);
+  const drop2 = drop;
+  ["dragover", "dragenter"].forEach((ev) => drop2.addEventListener(ev, (e) => { e.preventDefault(); drop2.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop2.addEventListener(ev, () => drop2.classList.remove("over")));
+  drop2.addEventListener("drop", (e) => { e.preventDefault(); files.files = e.dataTransfer.files; });
+  root.append(card(null, drop2));
+
+  const groups = [["Assets", o.accounts.filter((a) => a.kind === "asset")], ["Liabilities", o.accounts.filter((a) => a.kind === "liability")]];
+  for (const [title, list] of groups) {
+    if (!list.length) continue;
+    const total = list.reduce((t, a) => t + (a.balance || 0), 0);
+    root.append(h("div", { style: { marginTop: "1rem" } }, card(`${title} · ${money(total)}`, h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Account", "Type", title === "Assets" ? "Balance" : "Owed", title === "Liabilities" ? "APR %" : "", title === "Liabilities" ? "Min payment" : "", ""].map((t, i) => h("th", { class: i === 5 ? "r" : "" }, t)))),
+      h("tbody", {}, list.map(accountRow)))))));
+  }
+
+  const add = h("div", { class: "form-row" });
+  const n2 = h("input", { type: "text", placeholder: "e.g. Fidelity 401(k), Car loan", "aria-label": "New account name" });
+  const t2 = h("select", { "aria-label": "New account type" }, o.types.map((t) => h("option", { value: t.value, selected: t.value === "retirement" }, t.label)));
+  const b2 = h("input", { type: "text", inputmode: "decimal", placeholder: "balance", "aria-label": "New account balance" });
+  add.append(h("label", { class: "f" }, "Name", n2), h("label", { class: "f" }, "Type", t2), h("label", { class: "f" }, "Balance", b2),
+    h("button", { class: "btn", type: "button", onclick: async () => {
+      try { await api("/api/accounts", { method: "POST", json: { name: n2.value, type: t2.value, balance: b2.value } }); await loadOverview(); toast("Account added"); render(); } catch (e) { toast(e.message, true); }
+    } }, "Add account"));
+  root.append(h("div", { style: { marginTop: "1rem" } }, card("Add an account without transactions", add, h("p", { class: "fine" }, "For things with no export: a 401(k), a mortgage, a car loan. Liability balances are the amount you owe. Debts with an APR feed the payoff plan; cash and retirement balances feed the emergency-fund and retirement plans."))));
+  return root;
+}
+
+async function viewTransactions(params) {
+  const root = h("div", {});
+  const q = h("input", { type: "search", placeholder: "Search merchant…", value: params.get("q") || "", "aria-label": "Search" });
+  const mon = h("select", { "aria-label": "Month" }, h("option", { value: "" }, "All months"), OV.months.map((m) => h("option", { value: m.month, selected: m.month === params.get("month") }, monthLabel(m.month))));
+  const acc = h("select", { "aria-label": "Account" }, h("option", { value: "" }, "All accounts"), OV.accounts.map((a) => h("option", { value: a.name, selected: a.name === params.get("account") }, a.name)));
+  const catSel = h("select", { "aria-label": "Category" }, h("option", { value: "" }, "All categories"));
+  const body = h("tbody", {}), count = h("span", { class: "muted" });
+
+  async function load() {
+    const qs = new URLSearchParams({ q: q.value, month: mon.value, account: acc.value, category: catSel.value || "" });
+    const d = await api("/api/transactions?" + qs);
+    if (!catSel.dataset.filled) {
+      d.categories.forEach((c) => catSel.append(h("option", { value: c, selected: c === params.get("category") }, c)));
+      catSel.dataset.filled = "1";
+      if (params.get("category") && !catSel.value) catSel.value = params.get("category");
+      if (params.get("category")) return load();
+    }
+    count.textContent = `${d.transactions.length} shown`;
+    body.replaceChildren(...d.transactions.map((t) => h("tr", {},
+      h("td", { class: "num" }, t.date), h("td", {}, t.description, t.internal ? h("span", { class: "pill", style: { marginLeft: ".4rem" } }, "matched transfer") : null),
+      h("td", { class: "muted" }, t.account),
+      h("td", {}, h("button", { class: "pill" + (t.category === "Uncategorized" ? " warn alert" : ""), style: { cursor: "pointer", background: "none", font: "inherit", fontSize: ".72rem" }, title: "Click to categorize this merchant", onclick: () => categorizeDialog(t, load) }, t.category)),
+      h("td", { class: "r num " + (t.amount > 0 ? "good" : "") }, money(t.amount, 2)))));
+  }
+  let timer; q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 200); });
+  [mon, acc, catSel].forEach((el) => el.addEventListener("change", load));
+  root.append(head("Transactions", "Click a category to teach the app a merchant. Rules are saved on this PC."),
+    card(null, h("div", { class: "form-row" }, h("label", { class: "f" }, "Search", q), h("label", { class: "f" }, "Month", mon), h("label", { class: "f" }, "Account", acc), h("label", { class: "f" }, "Category", catSel))),
+    h("div", { style: { marginTop: "1rem" } }, card(null, h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Date", "Merchant", "Account", "Category", "Amount"].map((t, i) => h("th", { class: i === 4 ? "r" : "" }, t)))), body)), h("p", { class: "fine" }, count))));
+  await load();
+  return root;
+}
+
+function categorizeDialog(t, reload) {
+  const kw = h("input", { type: "text", value: t.description.split(/[\d#*]/)[0].trim().toUpperCase() || t.description.toUpperCase(), "aria-label": "Keyword" });
+  const cat = h("input", { type: "text", list: "cat-list", placeholder: "category", value: t.category === "Uncategorized" ? "" : t.category, "aria-label": "Category" });
+  const dl = h("datalist", { id: "cat-list" }, ["Housing", "Utilities", "Groceries", "Dining", "Transportation", "Subscriptions", "Health", "Insurance", "Shopping", "Entertainment", "Cash & ATM", "Debt Payments", "Savings", "Transfers", "Income", "Other"].map((c) => h("option", { value: c })));
+  const dlg = h("dialog", { style: { border: "1px solid var(--rule-2)", borderRadius: "10px", background: "var(--card)", color: "var(--ink)", padding: "1.2rem", width: "min(420px, 92vw)" } },
+    h("h3", {}, "Categorize"), h("p", { class: "muted" }, t.description),
+    h("div", { class: "grid" }, h("label", { class: "f" }, "Match any merchant containing", kw), h("label", { class: "f" }, "Category", cat, dl)),
+    h("p", { class: "fine" }, "Your rules beat the bank's own labels. Use “Transfers” for card payments and moves between your accounts."),
+    h("div", { class: "form-row", style: { marginTop: ".8rem", justifyContent: "flex-end" } },
+      h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Cancel"),
+      h("button", { class: "btn accent", type: "button", onclick: async () => {
+        try { await api("/api/rules", { method: "POST", json: { keyword: kw.value, category: cat.value } }); dlg.close(); await loadOverview(); toast("Rule saved"); reload(); }
+        catch (e) { toast(e.message, true); }
+      } }, "Save rule")));
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg); dlg.showModal(); cat.focus();
+}
+
+function viewSpending() {
+  const root = h("div", {});
+  root.append(head("Spending", "Average by category, and how each month compares. Darker means more."));
+  if (!OV.months.length) return root.append(emptyState("Import some transactions first.")), root;
+  const s = OV.snapshot, go = (c, m) => (location.hash = `#/transactions?category=${encodeURIComponent(c)}${m ? "&month=" + m : ""}`);
+  root.append(card("By month", heat(OV.months, go)),
+    h("div", { style: { marginTop: "1rem" } }, card("Monthly average by category", catBars(Object.entries(s.average_spending_by_category), go))));
+  return root;
+}
+
+function viewRecurring() {
+  const root = h("div", {}), list = OV.recurring;
+  const out = list.filter((r) => r.amount < 0), inn = list.filter((r) => r.amount > 0);
+  const sum = (a) => a.reduce((t, r) => t + r.monthly_cost, 0);
+  root.append(head("Recurring", "Charges and deposits that repeat on a steady schedule."));
+  root.append(h("div", { class: "grid cols-3" }, stat("Fixed outflows", money(-sum(out)), "per month"), stat("Recurring income", money(sum(inn)), "per month"), stat("Items", String(list.length), "detected")));
+  const rows = (arr) => arr.map((r) => h("tr", {}, h("td", {}, cap(r.merchant.toLowerCase())), h("td", {}, h("span", { class: "pill" }, r.cadence)), h("td", { class: "num" }, r.last), h("td", { class: "num" }, "~" + r.next), h("td", { class: "r num " + (r.amount > 0 ? "good" : "") }, money(r.amount, 2)), h("td", { class: "r num" }, money(r.monthly_cost, 2))));
+  root.append(h("div", { style: { marginTop: "1rem" } }, card(null, list.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Merchant", "Cadence", "Last", "Next", "Amount", "Per month"].map((t, i) => h("th", { class: i > 3 ? "r" : "" }, t)))), h("tbody", {}, rows(list.slice().sort((a, b) => a.amount - b.amount))))) : emptyState("Nothing detected yet. It needs 3+ similar charges."))));
+  return root;
+}
+
+const PROFILE_FIELDS = [
+  ["age", "Age", "number"], ["retire_age", "Retire at age", "number"],
+  ["filing_status", "Filing status", ["single", "mfj", "hoh", "mfs"]], ["state", "State tax", ["AR", "none"]],
+  ["annual_gross_income", "Gross pay / year", "money"], ["pre_tax_benefits_annual", "Health premiums etc. / year", "money"],
+  ["traditional_401k_annual", "Traditional 401(k) / year", "money"], ["roth_401k_annual", "Roth 401(k) / year", "money"],
+  ["traditional_ira_annual", "Traditional IRA / year", "money"], ["roth_ira_annual", "Roth IRA / year", "money"],
+  ["cash_savings", "Cash savings (else from accounts)", "money"], ["retirement_balance", "Retirement balance (else from accounts)", "money"],
+  ["monthly_retirement_contribution", "Retirement saved / month", "money"], ["target_retirement_spending_monthly", "Target retirement spend / month", "money"],
+  ["expected_return_pct", "Expected return %", "number"], ["inflation_pct", "Inflation %", "number"],
+];
+
+async function viewPlan() {
+  const root = h("div", {}), pr = await api("/api/profile"), s = OV.snapshot, p = s?.planning;
+  root.append(head("Plan", "Debt, emergency fund, retirement and taxes. Every number is computed in code, not guessed by the model."));
+
+  const inputs = {};
+  const fields = PROFILE_FIELDS.map(([key, label, kind]) => {
+    const cur = pr.profile[key], eff = pr.effective[key];
+    const el = Array.isArray(kind)
+      ? h("select", { "aria-label": label }, h("option", { value: "" }, "—"), kind.map((o) => h("option", { value: o, selected: String(cur) === o }, o)))
+      : h("input", { type: "text", inputmode: "decimal", value: cur ?? "", placeholder: eff != null && cur == null ? String(eff) : "", "aria-label": label });
+    inputs[key] = { el, kind };
+    return h("label", { class: "f" }, label, el);
+  });
+  const saveBtn = h("button", { class: "btn accent", type: "button", onclick: async () => {
+    const next = { ...pr.profile };
+    for (const [k, { el, kind }] of Object.entries(inputs)) {
+      const v = el.value.trim();
+      if (v === "") delete next[k]; else next[k] = Array.isArray(kind) ? v : Number(v.replace(/[$,]/g, ""));
+    }
+    try { await api("/api/profile", { method: "PUT", json: next }); await loadOverview(); toast("Profile saved"); render(); } catch (e) { toast(e.message, true); }
+  } }, "Save profile");
+
+  if (!s) return root.append(emptyState("Import transactions to see your plan.")), root;
+  const sections = [];
+  const ef = p.emergency_fund;
+  sections.push(card("Emergency fund", h("ul", { class: "list" },
+    h("li", {}, "3 months of essentials", h("b", { class: "num" }, money(ef.target_3_months))), h("li", {}, "6 months of essentials", h("b", { class: "num" }, money(ef.target_6_months))),
+    ef.cash_savings != null ? [h("li", {}, "Cash on hand", h("b", { class: "num" }, money(ef.cash_savings))), h("li", {}, "Months covered", h("b", { class: "num" }, String(ef.months_covered))), h("li", {}, "Shortfall to 3 / 6 months", h("b", { class: "num" }, `${money(ef.shortfall_to_3_months)} / ${money(ef.shortfall_to_6_months)}`))] : h("li", { class: "muted" }, "Add cash balances to see your cushion."))));
+  if (p.debt_payoff) sections.push(card(`Debt payoff · ${money(p.debt_payoff.total_debt)} owed`, h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Scenario", "Pays / mo", "Months", "Interest"].map((t, i) => h("th", { class: i ? "r" : "" }, t)))),
+    h("tbody", {}, p.debt_payoff.scenarios.map((d) => h("tr", {}, h("td", {}, d.scenario), h("td", { class: "r num" }, money(d.monthly_payment_total)), h("td", { class: "r num" }, d.months_to_debt_free ?? "never"), h("td", { class: "r num" }, d.total_interest != null ? money(d.total_interest) : "—")))))), p.debt_payoff.assumptions.map((a) => h("p", { class: "fine" }, a))));
+  if (p.retirement?.scenarios) sections.push(card(`Retirement · ${p.retirement.years_to_retirement} years, today's dollars`, h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["", "Return", "Balance", "Income / mo", p.retirement.scenarios[0].balance_needed ? "Needed / mo" : ""].map((t, i) => h("th", { class: i ? "r" : "" }, t)))),
+    h("tbody", {}, p.retirement.scenarios.map((r) => h("tr", {}, h("td", {}, cap(r.scenario)), h("td", { class: "r num" }, pct(r.nominal_return_pct)), h("td", { class: "r num" }, money(r.projected_balance)), h("td", { class: "r num" }, money(r.sustainable_monthly_income)), h("td", { class: "r num" }, r.monthly_contribution_needed != null ? money(r.monthly_contribution_needed) : "")))))), h("p", { class: "fine" }, "4% withdrawal rule; contributions assumed to rise with inflation.")));
+  const t = p.tax;
+  if (t && !t.error) sections.push(card(`Taxes · ${t.tax_year}`, h("ul", { class: "list" },
+    h("li", {}, "Federal income tax", h("b", { class: "num" }, money(t.federal_income_tax))), h("li", {}, "FICA", h("b", { class: "num" }, money(t.fica.total))), t.state ? h("li", {}, `${t.state.state} income tax`, h("b", { class: "num" }, money(t.state.income_tax))) : null,
+    h("li", {}, "Total", h("b", { class: "num" }, `${money(t.total_taxes)} (${pct(t.total_effective_rate_pct)})`)), h("li", {}, "Next dollar is taxed at", h("b", { class: "num" }, pct(t.combined_marginal_rate_on_next_dollar_pct))), h("li", {}, "Estimated take-home / month", h("b", { class: "num" }, money(t.estimated_monthly_take_home)))),
+    t.what_if.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Contribute more pre-tax", "Extra", "Tax saved", "Real cost"].map((x, i) => h("th", { class: i ? "r" : "" }, x)))), h("tbody", {}, t.what_if.map((w) => h("tr", {}, h("td", {}, w.scenario), h("td", { class: "r num" }, money(w.extra_pre_tax_contribution)), h("td", { class: "r num good" }, money(w.total_tax_saved)), h("td", { class: "r num" }, money(w.net_take_home_cost))))))) : null,
+    t.warnings.map((w) => h("p", { class: "fine bad" }, w))));
+  else if (t?.error) sections.push(card("Taxes", emptyState(t.error)));
+  if (p.missing_inputs.length) sections.push(card("Add these to unlock more", h("ul", { class: "list" }, p.missing_inputs.map((m) => h("li", {}, m)))));
+
+  root.append(h("div", { class: "grid cols-2" }, h("div", { class: "grid" }, sections), card("Your profile", h("p", { class: "fine", style: { marginTop: 0 } }, "Blank fields use your accounts where possible. Saved to profile.json on this PC."), h("div", { class: "fields" }, fields), h("div", { style: { marginTop: "1rem" } }, saveBtn))));
+  return root;
+}
+
+async function viewAdvisor() {
+  const root = h("div", {}), st = await api("/api/ollama"), history = [];
+  root.append(head("Advisor", "A local Ollama model that sees only your totals and plan results, never individual transactions."));
+  if (!OV.has_data) return root.append(emptyState("Import transactions first.")), root;
+  const models = st.models.length ? st.models : ["llama3:8b"];
+  const model = h("select", { "aria-label": "Model" }, models.map((m) => h("option", { value: m, selected: m === "llama3:8b" }, m)));
+  const msgs = h("div", { class: "msgs", "aria-live": "polite" });
+  const input = h("input", { type: "text", placeholder: "Ask about budgeting, debt, investing, taxes…", "aria-label": "Your question" });
+  const send = h("button", { class: "btn accent", type: "submit" }, "Ask");
+  async function ask(q) {
+    if (!q.trim()) return;
+    msgs.append(h("div", { class: "msg user" }, q)); const bot = h("div", { class: "msg bot" }, "…"); msgs.append(bot);
+    input.value = ""; send.disabled = true; msgs.scrollTop = msgs.scrollHeight;
+    try {
+      const res = await api("/api/advise", { method: "POST", json: { question: q, model: model.value, history }, raw: true });
+      if (!res.ok) throw new Error((await res.json()).error || "Request failed");
+      const reader = res.body.getReader(), dec = new TextDecoder(); let text = "";
+      for (;;) { const { done, value } = await reader.read(); if (done) break; text += dec.decode(value, { stream: true }); bot.textContent = text; msgs.scrollTop = msgs.scrollHeight; }
+      history.push({ role: "user", content: q }, { role: "assistant", content: text });
+    } catch (e) { bot.textContent = e.message; bot.classList.add("bad"); }
+    send.disabled = false; input.focus();
+  }
+  const form = h("form", { class: "form-row", onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send);
+  const chips = ["What should I do with my monthly surplus?", "Should I pay off debt or invest first?", "How much should my emergency fund be?", "Am I on track for retirement?", "Where am I overspending?"];
+  root.append(card(null,
+    !st.running ? h("div", { class: "note", style: { marginBottom: ".8rem" } }, "Ollama isn't running. Start it with ", h("code", {}, "ollama serve"), " and reload.") : null,
+    h("div", { class: "form-row", style: { marginBottom: ".8rem" } }, h("label", { class: "f", style: { flex: "0 1 260px" } }, "Model", model), h("div", { class: "chips", style: { flex: "3 1 300px", alignSelf: "end" } }, chips.map((c) => h("button", { class: "chip", type: "button", onclick: () => ask(c) }, c)))),
+    h("div", { class: "chat" }, msgs, form), h("p", { class: "fine" }, "Educational, not a licensed advisor. Replies come from a small local model: check the numbers against the Plan page.")));
+  return root;
+}
+
+/* ---------- router ---------- */
+const VIEWS = [["overview", "Overview", viewOverview], ["accounts", "Accounts", viewAccounts], ["transactions", "Transactions", viewTransactions],
+  ["spending", "Spending", viewSpending], ["recurring", "Recurring", viewRecurring], ["plan", "Plan", viewPlan], ["advisor", "Advisor", viewAdvisor]];
+
+function parseHash() {
+  const [path, qs] = location.hash.replace(/^#\/?/, "").split("?");
+  return [path || "overview", new URLSearchParams(qs || "")];
+}
+
+let renderSeq = 0, keepNote = null;
+async function render(note) {
+  keepNote = note || null;
+  const seq = ++renderSeq, [name, params] = parseHash();
+  const view = VIEWS.find((v) => v[0] === name) || VIEWS[0];
+  $("#nav").replaceChildren(...VIEWS.map(([id, label], i) => h("a", { href: `#/${id}`, "aria-current": id === view[0] ? "page" : null }, h("span", { class: "n" }, String(i + 1)), label)));
+  try {
+    if (!OV) await loadOverview();
+    const node = await view[2](params);
+    if (seq !== renderSeq) return;
+    $("#app").replaceChildren(node);
+    document.title = `${view[1]} · Ledger`;
+  } catch (e) {
+    $("#app").replaceChildren(h("div", { class: "note" }, "Something went wrong: " + e.message));
+  }
+}
+
+addEventListener("hashchange", () => { hideTip(); render(); window.scrollTo(0, 0); });
+$("#theme").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("ledger-theme", next); } catch { /* storage may be blocked */ }
+});
+try { const t = localStorage.getItem("ledger-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
+render();

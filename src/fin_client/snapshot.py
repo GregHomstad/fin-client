@@ -25,6 +25,12 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def profile_for(conn) -> dict:
+    """profile.json merged with what the accounts already know (debts, cash, retirement balances)."""
+    from fin_client import accounts
+    return accounts.effective_profile(load_profile(), accounts.list_accounts(conn))
+
+
 def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | None = None) -> dict:
     months = analytics.cashflow(txns, rules)
     if not months:

@@ -13,6 +13,7 @@ from fin_client.paths import data_dir
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="fin-client", description=__doc__)
+    p.add_argument("--data", type=Path, help="Use this private data directory instead of the default")
     sub = p.add_subparsers(dest="cmd", required=True)
     imp = sub.add_parser("import", help="Import a CSV/OFX/QFX bank export into the local store")
     imp.add_argument("file", type=Path)
@@ -25,6 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("plan", help="Debt payoff, emergency fund and retirement calculations (no model)")
     tx = sub.add_parser("tax", help="Federal income tax estimate and 401(k)/IRA what-ifs from profile.json (no data needed)")
     tx.add_argument("--year", type=int, default=2026)
+    db = sub.add_parser("dashboard", help="Start the local web dashboard (127.0.0.1 only)")
+    db.add_argument("--port", type=int, default=8780)
+    db.add_argument("--no-browser", action="store_true")
     sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
@@ -33,6 +37,12 @@ def main(argv: list[str] | None = None) -> int:
     adv.add_argument("--show-context", action="store_true",
                      help="Print exactly what the model would be given, then exit (no model call)")
     args = p.parse_args(argv)
+    if args.data:
+        os.environ["FIN_CLIENT_DATA"] = str(args.data)
+    if args.cmd == "dashboard":
+        from fin_client import web
+        web.serve(args.port, not args.no_browser)
+        return 0
 
     if args.cmd == "where":
         print(data_dir())
@@ -60,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date
 
         from fin_client import report
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
         if "error" in snap:
             print(snap["error"], file=sys.stderr)
             return 1
@@ -71,13 +81,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
     elif args.cmd == "plan":
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
         if "error" in snap:
             print(snap["error"], file=sys.stderr)
             return 1
         print(json.dumps(snap["planning"], indent=1))
     elif args.cmd == "advise":
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.load_profile())
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
         if args.show_context:
             print(json.dumps(snap, indent=1))
             return 0

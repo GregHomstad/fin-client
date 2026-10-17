@@ -26,6 +26,8 @@ fin-client import statement.csv      # or .ofx / .qfx
 fin-client cashflow | categories | recurring
 fin-client plan                      # debt payoff, emergency fund, retirement (pure math, no model)
 fin-client tax                       # federal tax estimate + 401(k)/IRA what-ifs (profile.json only)
+fin-client dashboard                 # local web UI on http://127.0.0.1:8780 (this PC only)
+fin-client label                     # categorize merchants interactively
 fin-client report                    # PDF to <data dir>\reports (aggregates only; refuses paths inside the repo)
 fin-client advise --show-context     # exactly what the model would see; no model call
 fin-client advise [--model llama3:8b]
@@ -43,6 +45,9 @@ Example `profile.json` (all fields optional; missing ones are reported, not gues
 Tax estimates (2026 tables, IRS Rev. Proc. 2025-32 and Notice 2025-67) cover federal ordinary income tax, standard/itemized deduction, 401(k) catch-ups, traditional IRA deduction and Roth IRA phase-outs. They include employee FICA and Arkansas income tax (2026: 3.7% top rate, DFA formula; set `"state": "none"` to skip). They exclude other states, credits, capital gains, AMT and HSAs. The snapshot compares estimated take-home to your actual bank deposits. Gross income must come from you, since bank deposits are after-tax. Add a new year by extending `tax.DATA`.
 
 Planning results are computed in code and given to the model as facts, in today's dollars. It refuses any non-loopback `OLLAMA_HOST`.
+
+## Dashboard
+`fin-client dashboard` serves a local web UI (Overview, Accounts, Transactions, Spending, Recurring, Plan, Advisor) on 127.0.0.1 only. It consolidates checking, savings, credit cards, loans and investments: import each export, type in balances for net worth, and card payments from checking are matched to the card's payment so spending is not double counted. No third-party requests (system fonts, hand-drawn charts, strict CSP), Host/Origin checks, and nothing is cached.
 
 ## Develop
 ```bash

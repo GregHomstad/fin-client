@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
+from fin_client import transfers
 from fin_client.models import Transaction
 from fin_client.paths import data_dir
 
@@ -39,13 +40,14 @@ def add(conn: sqlite3.Connection, txns: list[Transaction]) -> int:
     return conn.total_changes - before
 
 
-def all_transactions(conn: sqlite3.Connection) -> list[Transaction]:
-    return [
+def all_transactions(conn: sqlite3.Connection, match_transfers: bool = True) -> list[Transaction]:
+    txns = [
         Transaction(date.fromisoformat(d), desc, Decimal(a), acct, bc)
         for d, desc, a, acct, bc in conn.execute(
             "SELECT date, description, amount, account, bank_category FROM transactions ORDER BY date"
         )
     ]
+    return transfers.mark_internal(txns) if match_transfers else txns
 
 
 def monthly_summary(conn: sqlite3.Connection) -> dict[str, dict[str, Decimal]]:

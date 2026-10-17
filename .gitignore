@@ -26,3 +26,4 @@ dist/
 build/
 *.egg-info/
 .pytest_cache/
+.claude/launch.json
