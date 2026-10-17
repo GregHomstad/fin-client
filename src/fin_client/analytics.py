@@ -30,7 +30,7 @@ class Month:
 def cashflow(txns: list[Transaction], rules: Rules | None = None) -> list[Month]:
     months: dict[str, Month] = {}
     for t in txns:
-        cat = categorize(t.description, t.amount, rules)
+        cat = categorize(t.description, t.amount, rules, t.bank_category)
         if cat in EXCLUDED:
             continue
         m = months.setdefault(t.date.isoformat()[:7], Month(t.date.isoformat()[:7]))

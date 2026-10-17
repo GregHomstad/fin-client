@@ -22,6 +22,7 @@ def test_user_rules_take_priority(monkeypatch, tmp_path):
     rules = load_rules()
     assert categorize("MYSTERY VENDOR", Decimal(-5), rules) == "Hobbies"
     assert categorize("EXAMPLE APARTMENTS RENT", Decimal(-1), rules) == "Housing"
+    assert categorize("MYSTERY VENDOR", Decimal(-1), rules, "Shopping") == "Hobbies"  # your keywords beat the bank label
 
 
 def test_recurring_detection():
@@ -63,3 +64,34 @@ def test_cli_analysis_commands(monkeypatch, tmp_path, capsys):
     assert cli.main(["categories"]) == 0
     out = capsys.readouterr().out
     assert "Housing" in out and "MYSTERY VENDOR" in out
+
+
+def test_bank_category_is_used_as_fallback_after_keywords():
+    assert categorize("MYSTERY VENDOR", Decimal(-5), DEFAULT_RULES, "Food & Drink") == "Food & Drink"
+    assert categorize("EXAMPLE APARTMENTS RENT", Decimal(-5), DEFAULT_RULES, "Food & Drink") == "Food & Drink"
+    assert categorize("EXAMPLE APARTMENTS RENT", Decimal(-5), DEFAULT_RULES, "Uncategorized Expense") == "Housing"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Food/Groceries") == "Groceries"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Housing/Home Repair") == "Housing"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Healthcare - HSA Spending Account") == "Health"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Transfer Between Accounts/Credit Card Payment") == "Transfers"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Online Transfer") == "Transfers"
+    assert categorize("X", Decimal(-5), DEFAULT_RULES, "Uncategorized") == "Uncategorized"
+    rules = {**DEFAULT_RULES, "_bank_categories": {"food & drink": "Dining"}}
+    assert categorize("X", Decimal(-5), rules, "Food & Drink") == "Dining"
+
+
+def test_store_migrates_and_backfills_bank_category(tmp_path):
+    import sqlite3
+
+    from fin_client import store
+    db = tmp_path / "old.db"
+    old = sqlite3.connect(db)
+    old.execute("CREATE TABLE transactions (date TEXT NOT NULL, description TEXT NOT NULL, amount TEXT NOT NULL, "
+                "account TEXT NOT NULL, UNIQUE(date, description, amount, account))")
+    old.execute("INSERT INTO transactions VALUES ('2026-09-03','SAMPLE GROCERY MART','-86.42','SYNTHETIC CHECKING')")
+    old.commit(); old.close()
+    conn = store.connect(db)
+    store.add(conn, import_file(REPO_ROOT / "samples" / "synthetic_preamble.csv"))
+    got = {t.description: t.bank_category for t in store.all_transactions(conn)}
+    assert got["SAMPLE GROCERY MART"] == "Food"  # backfilled, not duplicated
+    assert len(got) == 3

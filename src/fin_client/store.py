@@ -16,14 +16,24 @@ def connect(db_path=None) -> sqlite3.Connection:
             amount TEXT NOT NULL, account TEXT NOT NULL,
             UNIQUE(date, description, amount, account))"""
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}
+    if "bank_category" not in cols:  # migrate older databases
+        conn.execute("ALTER TABLE transactions ADD COLUMN bank_category TEXT NOT NULL DEFAULT ''")
     return conn
 
 
 def add(conn: sqlite3.Connection, txns: list[Transaction]) -> int:
     before = conn.total_changes
     conn.executemany(
-        "INSERT OR IGNORE INTO transactions VALUES (?,?,?,?)",
-        [(t.date.isoformat(), t.description, str(t.amount), t.account) for t in txns],
+        "INSERT OR IGNORE INTO transactions (date, description, amount, account, bank_category) VALUES (?,?,?,?,?)",
+        [(t.date.isoformat(), t.description, str(t.amount), t.account, t.bank_category) for t in txns],
+    )
+    # re-importing fills in bank categories for rows stored before that column existed
+    conn.executemany(
+        "UPDATE transactions SET bank_category=? WHERE date=? AND description=? AND amount=? AND account=? "
+        "AND bank_category=''",
+        [(t.bank_category, t.date.isoformat(), t.description, str(t.amount), t.account)
+         for t in txns if t.bank_category],
     )
     conn.commit()
     return conn.total_changes - before
@@ -31,9 +41,9 @@ def add(conn: sqlite3.Connection, txns: list[Transaction]) -> int:
 
 def all_transactions(conn: sqlite3.Connection) -> list[Transaction]:
     return [
-        Transaction(date.fromisoformat(d), desc, Decimal(a), acct)
-        for d, desc, a, acct in conn.execute(
-            "SELECT date, description, amount, account FROM transactions ORDER BY date"
+        Transaction(date.fromisoformat(d), desc, Decimal(a), acct, bc)
+        for d, desc, a, acct, bc in conn.execute(
+            "SELECT date, description, amount, account, bank_category FROM transactions ORDER BY date"
         )
     ]
 

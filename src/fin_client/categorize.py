@@ -21,22 +21,56 @@ DEFAULT_RULES: Rules = {
 }
 
 
+BANK_CATEGORY_KEY = "_bank_categories"  # rules.json: {"_bank_categories": {"bank label": "Our Category"}}
+USER_KEY = "_user"  # user keyword rules live here so they outrank the bank's label
+
+# Bank labels are looked up whole, then by their first segment ("Food/Alcohol" -> "food")
+BANK_DEFAULT_MAP = {
+    "food/groceries": "Groceries", "food/dining out": "Dining", "food/alcohol": "Dining", "food": "Groceries",
+    "transportation": "Transportation", "utilities": "Utilities", "housing": "Housing", "income": "Income",
+    "insurance": "Insurance", "healthcare": "Health", "shopping": "Shopping", "entertainment": "Entertainment",
+    "financial services/atm": "Cash & ATM", "miscellaneous": "Other",
+}
+
+
+def _bank_category(bank_cat: str, overrides: dict[str, str]) -> str | None:
+    """Map the bank's own category label to ours; unknown labels are kept as-is."""
+    name = bank_cat.strip()
+    low = name.lower()
+    if not name or low.startswith("uncategorized") or low in ("other", "unknown"):
+        return None
+    if low in overrides:
+        return overrides[low]
+    if "transfer" in low:
+        return "Transfers"
+    if low in BANK_DEFAULT_MAP:
+        return BANK_DEFAULT_MAP[low]
+    first = low.split("/")[0].split(" - ")[0].strip()
+    return overrides.get(first) or BANK_DEFAULT_MAP.get(first) or name
+
+
 def load_rules() -> Rules:
-    """Merge user rules.json (if any) ahead of defaults."""
+    """Built-in keyword rules plus your rules.json (keywords, and optional bank-label overrides)."""
     path = data_dir() / "rules.json"
-    merged: Rules = {}
+    merged: dict = {cat: list(kws) for cat, kws in DEFAULT_RULES.items()}
     if path.exists():
         user = json.loads(path.read_text(encoding="utf-8"))
-        merged.update({k: [s.upper() for s in v] for k, v in user.items()})
-    for cat, kws in DEFAULT_RULES.items():
-        merged[cat] = merged.get(cat, []) + kws
+        merged[BANK_CATEGORY_KEY] = {k.lower(): v for k, v in user.pop(BANK_CATEGORY_KEY, {}).items()}
+        merged[USER_KEY] = {k: [s.upper() for s in v] for k, v in user.items()}
     return merged
 
 
-def categorize(description: str, amount: Decimal, rules: Rules | None = None) -> str:
+def categorize(description: str, amount: Decimal, rules: Rules | None = None, bank_category: str = "") -> str:
+    """Priority: your keyword rules, the bank's own category, built-in keywords, then a fallback."""
     rules = DEFAULT_RULES if rules is None else rules
     d = description.upper()
-    for cat, kws in rules.items():
+    for cat, kws in rules.get(USER_KEY, {}).items():  # type: ignore[union-attr]
         if any(k in d for k in kws):
+            return cat
+    mapped = _bank_category(bank_category, rules.get(BANK_CATEGORY_KEY, {}))  # type: ignore[arg-type]
+    if mapped:
+        return mapped
+    for cat, kws in rules.items():
+        if not cat.startswith("_") and any(k in d for k in kws):
             return cat
     return "Income" if amount > 0 else "Uncategorized"

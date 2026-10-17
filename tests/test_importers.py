@@ -63,3 +63,11 @@ def test_cli_roundtrip(monkeypatch, tmp_path, capsys):
     assert cli.main(["summary"]) == 0
     assert "2026-09" in capsys.readouterr().out
     assert cli.main(["import", str(tmp_path / "nope.csv")]) == 1
+
+
+def test_csv_with_account_preamble_and_account_column():
+    t = import_file(SAMPLES / "synthetic_preamble.csv")
+    assert [x.amount for x in t] == [Decimal("2500.00"), Decimal("-1100.00"), Decimal("-86.42")]
+    assert {x.account for x in t} == {"SYNTHETIC CHECKING"}  # taken from the Account column
+    explicit = import_file(SAMPLES / "synthetic_preamble.csv", account="main")
+    assert {x.account for x in explicit} == {"main"}

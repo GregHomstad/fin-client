@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
                 for cat, amt in sorted(m.by_category.items(), key=lambda kv: -kv[1]):
                     print(f"  {cat:<16}{amt:>10.2f}")
             unk = sorted({t.description for t in txns
-                          if t.amount < 0 and categorize(t.description, t.amount, rules) == "Uncategorized"})
+                          if t.amount < 0 and categorize(t.description, t.amount, rules, t.bank_category) == "Uncategorized"})
             if unk:
                 print("\nUncategorized (add keywords to rules.json in your data dir):")
                 for d in unk:

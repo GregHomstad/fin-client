@@ -9,3 +9,4 @@ class Transaction:
     description: str
     amount: Decimal  # negative = money out
     account: str = "default"
+    bank_category: str = ""  # category supplied by the bank export, if any
