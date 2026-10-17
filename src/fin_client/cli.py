@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("plan", help="Debt payoff, emergency fund and retirement calculations (no model)")
     tx = sub.add_parser("tax", help="Federal income tax estimate and 401(k)/IRA what-ifs from profile.json (no data needed)")
     tx.add_argument("--year", type=int, default=2026)
+    sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
     adv = sub.add_parser("advise", help="Chat with the local Ollama advisor about your finances")
@@ -49,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "label":
+        from fin_client import labeler
+        try:
+            labeler.run(store.all_transactions(conn))
+        except (EOFError, KeyboardInterrupt):
+            print("\nStopped; rules saved so far are kept.")
     elif args.cmd == "report":
         from datetime import date
 
