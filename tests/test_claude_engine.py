@@ -122,3 +122,76 @@ def test_cli_refuses_without_credential(monkeypatch, capsys):
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     assert cli.claude_chat(snap(), False, ask=lambda _p: "x", say=lambda s: None) == 1
     assert "credential" in capsys.readouterr().err
+
+
+def test_claude_works_through_the_claude_code_login_without_an_api_key(monkeypatch):
+    import io
+    import subprocess
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(adv.shutil, "which", lambda name: "claude" if name == "claude" else None)
+    assert adv.claude_via() == "cli" and adv.claude_ready()
+    monkeypatch.setattr(adv.shutil, "which", lambda name: None)
+    assert adv.claude_via() is None and not adv.claude_ready()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    assert adv.claude_via() == "api"  # a key wins when both exist
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr(adv.shutil, "which", lambda name: "claude")
+
+    seen = {}
+
+    class FakeBuf(io.BytesIO):
+        def read1(self, n=-1):
+            return self.read(n)
+
+    class FakeProc:
+        def __init__(self, cmd, **kw):
+            seen["cmd"], seen["cwd"] = cmd, kw["cwd"]
+            self.stdin, self.stdout, self.stderr = io.BytesIO(), FakeBuf("Hello ✓ there".encode("utf-8")), io.BytesIO(b"")
+            seen["stdin"] = self.stdin
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    payload = adv.build_claude_payload(snap(), [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}], "now?")
+    out = "".join(adv.claude_stream(payload))
+    assert out == "Hello ✓ there"
+    cmd = seen["cmd"]
+    assert cmd[:4] == ["claude", "-p", "--output-format", "text"] and "--tools" in cmd and cmd[cmd.index("--tools") + 1] == ""
+    assert "--model" not in cmd  # your Claude Code default model is used unless FIN_CLIENT_CLAUDE_CLI_MODEL is set
+    assert "--bare" not in cmd and "--no-session-persistence" in cmd  # --bare would disable the login
+    assert "Savor" not in " ".join(cmd) and len(" ".join(cmd)) < 1000  # the data goes over stdin, not the command line
+
+
+def test_claude_code_failure_is_reported_cleanly(monkeypatch):
+    import io
+    import subprocess
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(adv.shutil, "which", lambda name: "claude")
+
+    class Bad:
+        def __init__(self, cmd, **kw):
+            self.stdin, self.stdout, self.stderr = io.BytesIO(), type("B", (io.BytesIO,), {"read1": lambda s, n=-1: s.read(n)})(b""), io.BytesIO(b"Not logged in. Please run login")
+
+        def wait(self, timeout=None):
+            return 1
+
+        def poll(self):
+            return 1
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", Bad)
+    with pytest.raises(RuntimeError, match="log in"):
+        list(adv.claude_stream(adv.build_claude_payload(snap(), [], "q")))

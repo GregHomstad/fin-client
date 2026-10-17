@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import urllib.request
 from collections.abc import Callable, Iterator
 from urllib.parse import urlparse
@@ -120,13 +121,64 @@ def render_payload(payload: dict) -> str:
     return "\n".join(parts)
 
 
+def claude_via() -> str | None:
+    """How Claude would be reached: "api" (an API key in the environment), "cli" (your Claude Code login), or None.
+
+    Never reads or returns a key. The CLI route needs no key: it uses whatever you are logged in with in Claude Code.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return "api"
+    return "cli" if shutil.which("claude") else None
+
+
 def claude_ready() -> bool:
-    """True if an API credential is visible to this process. Never reads or returns the key itself."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return claude_via() is not None
+
+
+def _flatten(payload: dict) -> str:
+    """One prompt for `claude -p`: the instructions, the conversation so far, then the request to answer."""
+    convo = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in payload["messages"][:-1])
+    last = payload["messages"][-1]["content"]
+    return (payload["system"] + "\n\n=== CONVERSATION SO FAR ===\n" + (convo or "(none)") +
+            "\n\n=== ANSWER THIS NOW ===\n" + last + "\n")
+
+
+def claude_cli_stream(payload: dict, timeout: int = 600) -> Iterator[str]:
+    """Ask Claude through the Claude Code CLI (`claude -p`), using your existing login: no API key.
+
+    Runs in an empty temp directory with every tool disabled, so it can only answer; the prompt goes over stdin.
+    """
+    import codecs
+    import subprocess
+    import tempfile
+    exe = shutil.which("claude") or "claude"  # on Windows this resolves the npm shim (claude.cmd)
+    cmd = [exe, "-p", "--output-format", "text", "--tools", "", "--no-session-persistence", "--disable-slash-commands",
+           "--system-prompt", "You are a text-only assistant. Follow the instructions at the top of the user's message exactly."]
+    if os.environ.get("FIN_CLIENT_CLAUDE_CLI_MODEL"):  # otherwise Claude Code uses your own default model
+        cmd += ["--model", os.environ["FIN_CLIENT_CLAUDE_CLI_MODEL"]]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=tmp)
+        try:
+            proc.stdin.write(_flatten(payload).encode("utf-8"))
+            proc.stdin.close()
+            dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            for chunk in iter(lambda: proc.stdout.read1(256), b""):
+                yield dec.decode(chunk)
+            yield dec.decode(b"", final=True)
+            err = proc.stderr.read().decode("utf-8", "replace").strip()
+            if proc.wait(timeout=timeout) != 0:
+                hint = "Run `claude` once in a terminal and log in." if "login" in err.lower() or "auth" in err.lower() else err[:200]
+                raise RuntimeError(f"Claude Code returned an error. {hint}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
 
 
 def claude_stream(payload: dict) -> Iterator[str]:
-    """Send the approved payload to Claude and yield text as it streams. Needs the `claude` extra."""
+    """Send the approved payload to Claude and yield text as it streams. API key if set, else your Claude Code login."""
+    if claude_via() == "cli":
+        yield from claude_cli_stream(payload)
+        return
     try:
         import anthropic
     except ImportError as e:

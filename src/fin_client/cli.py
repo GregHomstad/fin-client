@@ -21,7 +21,7 @@ def categorize_cmd(args, conn, ask=input, say=print) -> int:
         if args.engine == "claude":
             from fin_client import advisor as adv
             if not adv.claude_ready():
-                print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+                print("error: Claude is not available: no credential found. Log in to Claude Code (run `claude` once) or set ANTHROPIC_API_KEY.", file=sys.stderr)
                 return 1
             prev = ai.evaluate(conn, txns, rules, types, "claude", args.model, preview_only=True)
             if "error" in prev:
@@ -56,7 +56,7 @@ def categorize_cmd(args, conn, ask=input, say=print) -> int:
     if args.engine == "claude":
         from fin_client import advisor as adv
         if not adv.claude_ready():
-            print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+            print("error: Claude is not available: no credential found. Log in to Claude Code (run `claude` once) or set ANTHROPIC_API_KEY.", file=sys.stderr)
             return 1
         payloads = ai.claude_payloads(cands, examples, args.model)
         say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC (merchant text, no account numbers, no raw transactions) ---")
@@ -100,7 +100,7 @@ def fullplan_cmd(args, conn, ask=input, say=print) -> int:
         label = f"{model}, local"
     elif args.narrative == "claude":
         if not adv.claude_ready():
-            print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+            print("error: Claude is not available: no credential found. Log in to Claude Code (run `claude` once) or set ANTHROPIC_API_KEY.", file=sys.stderr)
             return 1
         payload = adv.build_claude_payload(snap, [], PLAN_REQUEST, args.include_merchants, args.model)
         say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC ---")
@@ -132,7 +132,7 @@ def claude_chat(snap: dict, include_merchants: bool, ask=input, say=print) -> in
     """Chat with Claude. Every send is previewed in full and needs a typed 'y'."""
     from fin_client import advisor as adv
     if not adv.claude_ready():
-        print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY (or run `ant auth login`).", file=sys.stderr)
+        print("error: Claude is not available: no credential found. Log in to Claude Code (run `claude` once) or set ANTHROPIC_API_KEY.", file=sys.stderr)
         return 1
     say("Claude (cloud) mode. Nothing is sent until you approve it. Educational only, not licensed advice.")
     history: list[dict] = []
@@ -202,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
     fp.add_argument("--model", help="Model name for the narrative")
     fp.add_argument("--include-merchants", action="store_true", help="With claude: also send recurring merchant names")
     fp.add_argument("--out", type=Path, help="Output PDF path (must be outside the repo)")
+    tp = sub.add_parser("transactions", help="PDF of every transaction with categories and a data-coverage page")
+    tp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
     sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
@@ -237,6 +239,18 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "transactions":
+        from datetime import date as _d
+
+        from fin_client import accounts, coverage, report
+        txns = store.all_transactions(conn)
+        cov = coverage.analyze(txns, accounts.list_accounts(conn), snapshot.load_profile())
+        out = args.out or data_dir() / "reports" / f"fin-client-all-transactions-{_d.today():%Y-%m-%d}.pdf"
+        try:
+            print(f"Wrote {report.build_transactions_pdf(txns, load_rules(), cov, out)}")
+        except (RuntimeError, OSError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     elif args.cmd == "fullplan":
         return fullplan_cmd(args, conn)
     elif args.cmd == "categorize":

@@ -233,7 +233,7 @@ def _claude_payload(d: dict, snap: dict) -> dict:
 
 async def claude_status(request: Request):
     import importlib.util
-    return ok({"ready": adv.claude_ready(), "sdk": importlib.util.find_spec("anthropic") is not None,
+    return ok({"ready": adv.claude_ready(), "via": adv.claude_via(), "sdk": importlib.util.find_spec("anthropic") is not None,
                "model": adv.CLAUDE_MODEL})
 
 
@@ -264,8 +264,8 @@ async def advise(request: Request):
         if d.get("digest") != adv.payload_digest(payload):
             return err("What would be sent has changed since you previewed it. Preview it again.", 409)
         if not adv.claude_ready():
-            return err("No Anthropic credential found. Set ANTHROPIC_API_KEY in the environment that runs the "
-                       "dashboard (or run `ant auth login`), then restart it.", 400)
+            return err("Claude is not available here. Log in to Claude Code (run `claude` once in a terminal) or set "
+                       "ANTHROPIC_API_KEY, then restart the dashboard.", 400)
 
         def claude_stream():
             try:

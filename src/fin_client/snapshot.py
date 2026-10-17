@@ -25,6 +25,13 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _data_quality(conn, txns, profile: dict) -> list[str]:
+    if conn is None:
+        return []
+    from fin_client import accounts, coverage
+    return coverage.analyze(txns, accounts.list_accounts(conn), profile)["warnings"]
+
+
 def _recovery(conn, essential: float, surplus: float, cat_avg: dict, profile: dict) -> dict | None:
     if conn is None:
         return None
@@ -94,6 +101,7 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
             {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),
              "net": _f(m.net)} for m in months
         ],
+        "data_quality": _data_quality(conn, txns, profile or {}),
         "history_window": analytics.window(months, 12),
         "months_with_data": len(months),
         "planning": plan,

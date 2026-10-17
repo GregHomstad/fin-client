@@ -77,6 +77,12 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
               Paragraph(f"Generated {date.today():%B %d, %Y} &middot; data {p['first_month']} to {p['last_month']} "
                         f"({p['months_in_averages']} full months in averages)", small), Spacer(1, 8)]
 
+    dq = snap.get("data_quality") or []
+    if dq:
+        story.append(Paragraph("Read this first: data quality", h2))
+        for w in dq:
+            story.append(Paragraph("&bull; " + w.replace("&", "&amp;"), body))
+        story.append(Spacer(1, 6))
     if narrative:
         bullet = ss["BodyText"].clone("bullet", leftIndent=12, firstLineIndent=-8, spaceAfter=2)
         h3 = ss["Heading3"]
@@ -263,4 +269,47 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
     SimpleDocTemplate(str(out), pagesize=letter, leftMargin=0.75 * inch, rightMargin=0.75 * inch,
                       topMargin=0.7 * inch, bottomMargin=0.8 * inch, title="Personal Finance Report",
                       author="fin-client").build(story, onFirstPage=footer, onLaterPages=footer)
+    return out
+
+
+def build_transactions_pdf(txns, rules, cov: dict, out: Path) -> Path:
+    """Every transaction with its category, plus a data-coverage page that explains gaps."""
+    from fin_client.categorize import categorize
+    out = check_output_path(out)
+    ss = getSampleStyleSheet()
+    h1, h2, body = ss["Title"], ss["Heading2"], ss["BodyText"]
+    h2.textColor = ACCENT
+    small = ss["BodyText"].clone("small2", fontSize=7.5, textColor=MUTED, leading=10)
+    story = [Paragraph("All transactions and data coverage", h1),
+             Paragraph(f"Generated {date.today():%B %d, %Y}. {len(txns)} transactions, {cov.get('oldest', '-')} to {cov.get('newest', '-')}.", small),
+             Spacer(1, 6), Paragraph("Why the totals may not look real", h2)]
+    for w in cov["warnings"]:
+        story.append(Paragraph("&bull; " + w.replace("&", "&amp;"), body))
+    story += [Spacer(1, 6), Paragraph("By month (as imported)", h2),
+              _table([["Month", "Txns", "Active days", "Money in", "Money out"]] +
+                     [[m["month"], m["transactions"], f"{m['first_day']}-{m['last_day']} of {m['days_in_month']}" + (" (partial)" if m["looks_partial"] else ""),
+                       money(m["money_in"], 2), money(m["money_out"], 2)] for m in cov["months"]],
+                     [0.9 * inch, 0.7 * inch, 2.0 * inch, 1.2 * inch, 1.2 * inch]),
+              Spacer(1, 6), Paragraph("By account", h2),
+              _table([["Account", "Txns", "First", "Last"]] + [[a["name"], a["transactions"], a["first"] or "-", a["last"] or "none imported"] for a in cov["accounts"]],
+                     [2.6 * inch, 0.8 * inch, 1.3 * inch, 1.3 * inch]),
+              PageBreak(), Paragraph("Every transaction", h2)]
+    rows = [["Date", "Merchant", "Account", "Category", "Amount"]]
+    for t in sorted(txns, key=lambda x: x.date, reverse=True):
+        cat = categorize(t.description, t.amount, rules, t.bank_category)
+        rows.append([t.date.isoformat(), " ".join(t.description.split())[:34], t.account[:16], cat[:18], money(float(t.amount), 2)])
+    tbl = _table(rows, [0.8 * inch, 2.3 * inch, 1.1 * inch, 1.2 * inch, 0.9 * inch])
+    tbl.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 7.5), ("ALIGN", (4, 0), (4, -1), "RIGHT"), ("ALIGN", (1, 0), (3, -1), "LEFT")]))
+    story.append(tbl)
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(0.75 * inch, 0.5 * inch, "CONFIDENTIAL - personal financial data. Generated locally by fin-client.")
+        canvas.drawRightString(letter[0] - 0.75 * inch, 0.5 * inch, f"Page {doc.page}")
+        canvas.restoreState()
+
+    SimpleDocTemplate(str(out), pagesize=letter, leftMargin=0.7 * inch, rightMargin=0.7 * inch, topMargin=0.7 * inch,
+                      bottomMargin=0.8 * inch, title="All transactions", author="fin-client").build(story, onFirstPage=footer, onLaterPages=footer)
     return out

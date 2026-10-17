@@ -539,8 +539,9 @@ async function viewAdvisor() {
     banner.replaceChildren(e === "local"
       ? "Local mode: nothing leaves this computer."
       : h("span", {}, "Claude mode: before every message you will see exactly what is sent to Anthropic (your totals, plan results and the conversation, with account and merchant names hidden) and must approve it. ",
-        !cl.ready ? h("b", { class: "bad" }, "No credential found: set ANTHROPIC_API_KEY and restart the dashboard. ") : null,
-        !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
+        cl.via === "cli" ? h("b", {}, "It uses your Claude Code login: no API key needed. ") : null,
+        !cl.ready ? h("b", { class: "bad" }, "Claude isn't available: log in to Claude Code (run claude once in a terminal) or set ANTHROPIC_API_KEY, then restart the dashboard. ") : null,
+        cl.via === "api" && !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
     send.textContent = e === "local" ? "Ask" : "Review & send…";
   }
 
@@ -635,8 +636,9 @@ async function viewCategorize() {
     model.placeholder = e === "local" ? "llama3:8b" : cl.model;
     note.replaceChildren(e === "local" ? "Local mode: merchant names never leave this computer. Small local models are decent, not great, on obscure merchants: check the review queue."
       : h("span", {}, "Claude mode: only merchant text, counts, typical amounts and your own labels are sent, after you review the exact requests. No account names or numbers. ",
-        !cl.ready ? h("b", { class: "bad" }, "No credential found: set ANTHROPIC_API_KEY and restart the dashboard. ") : null,
-        !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
+        cl.via === "cli" ? h("b", {}, "It uses your Claude Code login: no API key needed. ") : null,
+        !cl.ready ? h("b", { class: "bad" }, "Claude isn't available: log in to Claude Code (run claude once in a terminal) or set ANTHROPIC_API_KEY, then restart the dashboard. ") : null,
+        cl.via === "api" && !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
   }
   pick("local");
 
