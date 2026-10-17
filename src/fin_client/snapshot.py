@@ -25,6 +25,13 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _recovery(conn, essential: float, surplus: float, cat_avg: dict, profile: dict) -> dict | None:
+    if conn is None:
+        return None
+    from fin_client import accounts, goals, recovery
+    return recovery.build(surplus, essential, cat_avg, accounts.list_accounts(conn), goals.list_goals(conn), profile)
+
+
 def _goals_plan(conn, essential: float, surplus: float) -> dict | None:
     """Goal-based action plan, trimmed for the advisor (no month-by-month series)."""
     if conn is None:
@@ -87,8 +94,11 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
             {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),
              "net": _f(m.net)} for m in months
         ],
+        "history_window": analytics.window(months, 12),
+        "months_with_data": len(months),
         "planning": plan,
         "goals_plan": _goals_plan(conn, _f(essential), _f(avg["avg_net"])),
+        "recovery": _recovery(conn, _f(essential), _f(avg["avg_net"]), cat_avg, profile or {}),
         "paycheck_reconciliation": recon,
         "user_profile": profile or {},
         "notes": ["Internal transfers are excluded from income and spending.",

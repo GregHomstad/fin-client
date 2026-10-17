@@ -91,8 +91,8 @@ function monthlyBars(months) {
     });
     const inc = mk(m.income, cx - bw - 1, "var(--s1)", "Income"), sp = mk(m.spending, cx + 1, "var(--s2)", "Spending");
     const hit = sv("rect", { x: cx - step / 2, y: T, width: step, height: ih, fill: "transparent" });
-    hover(hit, () => [monthLabel(m.month), `Income ${money(m.income)}`, `Spending ${money(m.spending)}`, `Net ${money(m.net)}`, `Saved ${pct(m.savings_rate)}`]);
-    svg.append(inc, sp, hit, sv("text", { x: cx, y: H - 10, "text-anchor": "middle" }, monthLabel(m.month)));
+    hover(hit, () => m.missing ? [monthLabel(m.month), "No imported transactions for this month"] : [monthLabel(m.month), `Income ${money(m.income)}`, `Spending ${money(m.spending)}`, `Net ${money(m.net)}`, `Saved ${pct(m.savings_rate)}`]);
+    svg.append(inc, sp, hit, sv("text", { x: cx, y: H - 10, "text-anchor": "middle" }, m.missing ? "·" : monthLabel(m.month)));
   });
   svg.append(sv("line", { class: "axis", x1: L, x2: W - R, y1: y(0), y2: y(0) }));
   return svg;
@@ -169,7 +169,7 @@ function viewOverview() {
   if (s?.planning.missing_inputs.length) attention.push(h("li", {}, h("span", {}, `${s.planning.missing_inputs.length} profile inputs missing for tax and retirement plans`), h("a", { href: "#/plan" }, "Add")));
 
   root.append(h("div", { class: "grid cols-2", style: { marginTop: "1rem" } },
-    card("Income vs spending", o.months.length ? monthlyBars(o.months) : emptyState("No months yet"),
+    card("Income vs spending, last 12 months", o.months.length ? monthlyBars(windowMonths(o.months)) : emptyState("No months yet"),
       h("div", { class: "legend", style: { marginTop: ".4rem" } }, h("span", { style: { "--c": "var(--s1)" } }, "Income"), h("span", { style: { "--c": "var(--s2)" } }, "Spending"))),
     card("Where it goes", s ? catBars(Object.entries(s.average_spending_by_category).slice(0, 9), (c) => (location.hash = `#/transactions?category=${encodeURIComponent(c)}`)) : null)));
 
@@ -365,6 +365,51 @@ function timelineChart(tl) {
 
 const append = (el, ...kids) => { for (const k of kids.flat(Infinity)) if (k != null && k !== false) el.append(k.nodeType ? k : String(k)); };
 
+function windowMonths(months, n = 12) {
+  if (!months.length) return [];
+  const by = Object.fromEntries(months.map((m) => [m.month, m]));
+  const [y, mo] = months[months.length - 1].month.split("-").map(Number), out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const t = y * 12 + (mo - 1) - i, k = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+    out.push(by[k] || { month: k, missing: true, income: 0, spending: 0, net: 0, savings_rate: null });
+  }
+  return out;
+}
+
+function recoverySection(rc) {
+  const root = h("div", { style: { margin: "1.4rem 0" } });
+  if (!rc) return root;
+  const p = rc.position;
+  append(root, h("div", { class: "eyebrow" }, "Getting back on track"), h("h2", {}, "Where you stand and what moves the needle"),
+    h("p", { class: "fine" }, "Computed scenarios from your own numbers, not advice. The choices stay yours."));
+  const stand = card("Where you stand", h("ul", { class: "list" },
+    h("li", {}, "Net worth", h("b", { class: "num " + (p.net_worth < 0 ? "bad" : "") }, money(p.net_worth))),
+    h("li", {}, "Debt not yet funded", h("b", { class: "num" }, money(p.debt_not_yet_funded))),
+    p.set_aside_for_debts ? h("li", {}, "Set aside for debts already funded", h("b", { class: "num" }, money(p.set_aside_for_debts))) : null,
+    h("li", {}, "Usable cash", h("b", { class: "num" }, money(p.usable_cash))),
+    h("li", {}, "Must-pay costs per month", h("b", { class: "num" }, money(p.must_pay_per_month))),
+    h("li", {}, "Months your cash covers", h("b", { class: "num" }, p.months_covered_today ?? "—")),
+    h("li", {}, "Monthly surplus", h("b", { class: "num " + (p.monthly_surplus < 0 ? "bad" : "good") }, money(p.monthly_surplus)))),
+    p.pending_deposits ? h("p", { class: "fine" }, `Not counted yet: ${money(p.pending_deposits)} waiting to be deposited (would cover ${p.months_covered_after_deposits} months).`) : null);
+  const stress = card("If income stops", h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["Months", "Cash needed", "Short today", "After deposits"].map((t, i) => h("th", { class: i ? "r" : "" }, t)))),
+    h("tbody", {}, rc.income_stops.map((r) => h("tr", {}, h("td", {}, r.months_without_income), h("td", { class: "r num" }, money(r.cash_needed)),
+      h("td", { class: "r num " + (r.shortfall_today ? "bad" : "good") }, money(r.shortfall_today)), h("td", { class: "r num " + (r.shortfall_after_deposits ? "bad" : "good") }, money(r.shortfall_after_deposits))))))),
+    h("p", { class: "fine" }, "No income and no unemployment benefits assumed. Useful if a contract does not convert."));
+  append(root, h("div", { class: "grid cols-2" }, stand, stress));
+  const d = rc.discretionary;
+  if (d.total_per_month) {
+    append(root, h("div", { style: { marginTop: "1rem" } }, card("What trimming discretionary spending changes",
+      h("div", { class: "grid cols-2" },
+        h("div", {}, h("p", { class: "fine", style: { marginTop: 0 } }, "Your average per month today"), h("ul", { class: "list" }, Object.entries(d.per_month).map(([c, v]) => h("li", {}, c, h("b", { class: "num" }, money(v)))), h("li", {}, h("b", {}, "Total"), h("b", { class: "num" }, money(d.total_per_month))))),
+        h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Trim", "Freed / mo", "Debt free", "Sooner"].map((t, i) => h("th", { class: i ? "r" : "" }, t)))),
+          h("tbody", {}, d.scenarios.map((t) => h("tr", {}, h("td", {}, `${t.trim_pct}%`), h("td", { class: "r num" }, money(t.monthly_freed)), h("td", { class: "r" }, t.debt_free ? ymLabel(t.debt_free) : "—"), h("td", { class: "r num" }, t.months_sooner != null ? `${t.months_sooner} mo` : "—"))))),
+          h("p", { class: "fine" }, `Debt free around ${d.debt_free_today ? ymLabel(d.debt_free_today) : "not within 10 years"} at today's pace.`))))));
+  }
+  rc.notes.forEach((n) => append(root, h("p", { class: "fine" }, n)));
+  return root;
+}
+
 function goalsSection(gp) {
   const root = h("div", { style: { marginBottom: "1.4rem" } }), plan = gp.plan;
   const reload = async () => { await loadOverview(); render(); };
@@ -448,6 +493,7 @@ async function viewPlan() {
 
   if (!s) return root.append(emptyState("Import transactions to see your plan.")), root;
   root.append(goalsSection(gp));
+  append(root, recoverySection(s.recovery));
   const sections = [];
   const ef = p.emergency_fund;
   sections.push(card("Emergency fund", h("ul", { class: "list" },

@@ -50,10 +50,10 @@ def _chart(history):
     c = VerticalBarChart()
     c.x, c.y, c.width, c.height = 45, 25, 6.5 * inch - 60, 1.7 * inch
     c.data = [[m["income"] for m in history], [m["spending"] for m in history]]
-    c.categoryAxis.categoryNames = [m["month"][2:] for m in history]
-    c.categoryAxis.labels.fontSize = 7
-    c.valueAxis.labels.fontSize = 7
+    c.categoryAxis.categoryNames = [(m["month"][2:] + ("*" if m.get("missing") else "")) for m in history]
+    c.categoryAxis.labels.fontSize = 6.5
     c.categoryAxis.labels.fontName = c.valueAxis.labels.fontName = "Helvetica"
+    c.valueAxis.labels.fontSize = 7
     c.valueAxis.valueMin = 0
     c.valueAxis.labelTextFormat = lambda v: f"${v:,.0f}"
     c.bars[0].fillColor, c.bars[1].fillColor = INCOME_C, SPEND_C
@@ -100,7 +100,11 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
                              if snap.get("recurring_outflows_pct_of_income") is not None else "")]],
                         [3.2 * inch, 2.6 * inch]))
 
-    story += [Paragraph("Income vs spending by month", h2), _chart(snap["monthly_history"])]
+    hist = snap.get("history_window") or snap["monthly_history"]
+    have = snap.get("months_with_data", len(snap["monthly_history"]))
+    story += [Paragraph("Income vs spending by month (last 12 months)", h2), _chart(hist)]
+    story.append(Paragraph(f"{have} of the last 12 months have data. Months marked * have no imported transactions; "
+                           "import older statements to fill them in. Partial first and last months can look low.", small))
 
     story.append(Paragraph("Average monthly spending by category", h2))
     total = sum(snap["average_spending_by_category"].values()) or 1
@@ -195,6 +199,44 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
             story.append(Paragraph(f"Debt free around {gp['debt_free']} at this pace.", small))
         for a in gp["assumptions"] + gp["warnings"]:
             story.append(Paragraph(f"Note: {a}", small))
+
+    rc = snap.get("recovery")
+    if rc:
+        pos = rc["position"]
+        story.append(Paragraph("Getting back on track: your numbers", h2))
+        story.append(Paragraph("Computed scenarios from your own data, not advice. The choices are yours.", small))
+        story.append(_table([["Where you stand", "Amount"],
+                             ["Net worth", money(pos["net_worth"])],
+                             ["Assets / liabilities", f"{money(pos['assets'])} / {money(pos['liabilities'])}"],
+                             ["Debt not yet funded", money(pos["debt_not_yet_funded"])],
+                             ["Set aside for debts already funded", money(pos["set_aside_for_debts"])],
+                             ["Usable cash (excludes money set aside)", money(pos["usable_cash"])],
+                             ["Must-pay costs per month (essentials + debt minimums)", money(pos["must_pay_per_month"])],
+                             ["Months of must-pay costs your cash covers", f"{pos['months_covered_today']}" if pos["months_covered_today"] is not None else "-"],
+                             ["Monthly surplus today", money(pos["monthly_surplus"])]],
+                            [3.9 * inch, 2.0 * inch]))
+        if pos["pending_deposits"]:
+            story.append(Paragraph(f"Not counted yet: {money(pos['pending_deposits'])} waiting to be deposited (would cover "
+                                   f"{pos['months_covered_after_deposits']} months).", small))
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("If income stops (for example, a contract that does not convert)", h2))
+        story.append(_table([["Months without income", "Cash needed", "Short today", "Short after deposits"]] +
+                            [[str(r["months_without_income"]), money(r["cash_needed"]), money(r["shortfall_today"]),
+                              money(r["shortfall_after_deposits"])] for r in rc["income_stops"]],
+                            [1.8 * inch, 1.3 * inch, 1.3 * inch, 1.5 * inch]))
+        disc = rc["discretionary"]
+        if disc["per_month"]:
+            story.append(Paragraph("What trimming discretionary spending would change", h2))
+            story.append(_table([["Discretionary category", "Per month"]] + [[c, money(v)] for c, v in disc["per_month"].items()]
+                                + [["Total", money(disc["total_per_month"])]], [3.9 * inch, 2.0 * inch]))
+            story.append(Spacer(1, 4))
+            story.append(_table([["Trim", "Freed / month", "New surplus", "Debt free", "Months sooner"]] +
+                                [[f"{t['trim_pct']}%", money(t["monthly_freed"]), money(t["new_monthly_surplus"]),
+                                  t["debt_free"] or "-", str(t["months_sooner"]) if t["months_sooner"] is not None else "-"]
+                                 for t in disc["scenarios"]], [0.8 * inch, 1.3 * inch, 1.3 * inch, 1.2 * inch, 1.3 * inch]))
+            story.append(Paragraph(f"Debt free around {disc['debt_free_today'] or 'not within 10 years'} at today's pace.", small))
+        for n in rc["notes"]:
+            story.append(Paragraph(f"Note: {n}", small))
 
     rec = snap.get("paycheck_reconciliation")
     if rec:

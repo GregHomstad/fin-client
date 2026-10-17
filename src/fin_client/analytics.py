@@ -45,6 +45,24 @@ def cashflow(txns: list[Transaction], rules: Rules | None = None) -> list[Month]
     return [months[k] for k in sorted(months)]
 
 
+def window(months: list[Month], n: int = 12) -> list[dict]:
+    """The last n calendar months ending at the latest month with data; months with no data are marked missing."""
+    if not months:
+        return []
+    by = {m.month: m for m in months}
+    y, mo = map(int, months[-1].month.split("-"))
+    keys = []
+    for i in range(n - 1, -1, -1):
+        yy, mm = divmod(y * 12 + mo - 1 - i, 12)
+        keys.append(f"{yy:04d}-{mm + 1:02d}")
+    out = []
+    for k in keys:
+        m = by.get(k)
+        out.append({"month": k, "missing": m is None, "income": float(m.income) if m else 0.0,
+                    "spending": float(m.spending) if m else 0.0, "net": float(m.net) if m else 0.0})
+    return out
+
+
 def averages(months: list[Month]) -> dict[str, Decimal]:
     """Averages over full months; drops the first and last month if there are 3+ (likely partial)."""
     use = months[1:-1] if len(months) >= 3 else months
