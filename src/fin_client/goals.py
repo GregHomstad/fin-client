@@ -84,14 +84,21 @@ def build_plan(goals: list[dict], accts: list[dict], essential_monthly: float, s
     if surplus <= 0:
         warnings.append("Your spending is at or above your income, so there is no surplus to allocate. Fixing that comes first.")
 
-    cash = sum(a["balance"] for a in accts if a["type"] in ("checking", "savings", "cash") and a["balance"] is not None)
+    cash = sum(a["balance"] - (a.get("earmarked") or 0) for a in accts
+               if a["type"] in ("checking", "savings", "cash") and a["balance"] is not None)
+    prefunded = {}
+    for a in accts:
+        if a["kind"] == "asset" and a.get("earmarked") and a.get("earmark_for"):
+            tgt = next((x for x in accts if x["name"] == a["earmark_for"] and x["kind"] == "liability"), None)
+            if tgt and a["earmarked"] >= (tgt["balance"] or 0) - 0.005:
+                prefunded[tgt["name"]] = {"debt": tgt["name"], "amount": round(a["earmarked"], 2), "from": a["name"]}
     if not any(a["type"] in ("checking", "savings", "cash") and a["balance"] is not None for a in accts):
         warnings.append("No cash balances entered, so the emergency fund is assumed to start at $0.")
 
     # ---- debts from liability accounts
     debts = []
     for a in accts:
-        if a["kind"] == "liability" and a["balance"] and a["balance"] > 0:
+        if a["kind"] == "liability" and a["balance"] and a["balance"] > 0 and a["name"] not in prefunded:
             apr = a["apr_pct"]
             if apr is None:
                 assumptions.append(f"{a['name']}: APR unknown, assumed 0%. Add it for a realistic plan.")
@@ -243,7 +250,10 @@ def build_plan(goals: list[dict], accts: list[dict], essential_monthly: float, s
     elif debts:
         warnings.append(f"Debts are not fully paid off within {HORIZON // 12} years at this pace.")
 
-    return {"as_of": today.isoformat(), "monthly_surplus": round(surplus, 2), "essential_monthly": round(essential_monthly, 2),
+    if prefunded:
+        assumptions.append("Money set aside to repay " + ", ".join(p["debt"] for p in prefunded.values())
+                           + " is excluded from your emergency fund and that debt from the payoff waterfall. Pay it as agreed.")
+    return {"as_of": today.isoformat(), "prefunded": list(prefunded.values()), "monthly_surplus": round(surplus, 2), "essential_monthly": round(essential_monthly, 2),
             "cash_on_hand": round(cash, 2), "this_month": this_month, "milestones": sorted(milestones, key=lambda x: x["date"]),
             "goals": out_goals, "debt_free": debt_free,
             "debts": [{"name": x["name"], "apr": x["apr"], "min": round(x["min"], 2), "paid_off": x["done"].isoformat()[:7] if x["done"] else None}

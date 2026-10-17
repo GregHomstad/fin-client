@@ -91,3 +91,26 @@ def test_cashflow_excludes_matched_transfers(tmp_path):
                      tx(5, "PAYMENT THANK YOU", "300", "CARD"), tx(3, "GROCERY", "-300", "CARD")])
     m = analytics.cashflow(store.all_transactions(conn))[0]
     assert m.income == 2000 and m.spending == 300  # the payment counted once, as the grocery spend
+
+
+def test_set_aside_money_is_excluded_from_cash_and_prefunds_the_debt(tmp_path):
+    from fin_client import goals
+    conn = store.connect(tmp_path / "t.db")
+    accounts.upsert(conn, "Checking", "checking", 800)
+    accounts.upsert(conn, "Savings", "savings", 9000, earmarked=7000, earmark_for="Family loan")
+    accounts.upsert(conn, "Family loan", "loan", 7000, apr_pct=0)
+    accts = accounts.list_accounts(conn)
+    assert accounts.prefunded_debts(accts) == {"Family loan": 7000.0}
+    p = accounts.effective_profile({}, accts)
+    assert p["cash_savings"] == 2800 and "debts" not in p  # 800 + 9000 - 7000; the funded loan is not a payoff target
+    assert accounts.net_worth(accts)["set_aside"] == 7000
+    plan = goals.build_plan([], accts, 1000, 300, date(2026, 10, 17))
+    assert plan["cash_on_hand"] == 2800 and plan["prefunded"] == [{"debt": "Family loan", "amount": 7000.0, "from": "Savings"}]
+    assert plan["debts"] == [] and any("set aside" in a for a in plan["assumptions"])
+    # partial set-aside does not prefund
+    accounts.upsert(conn, "Savings", "savings", 9000, earmarked=3000, earmark_for="Family loan")
+    assert accounts.prefunded_debts(accounts.list_accounts(conn)) == {}
+    with pytest.raises(ValueError):
+        accounts.upsert(conn, "Savings", "savings", 100, earmarked=500)
+    with pytest.raises(ValueError):
+        accounts.upsert(conn, "Card", "credit_card", 100, earmarked=50)

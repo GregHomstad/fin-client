@@ -117,7 +117,8 @@ async def save_account(request: Request):
     d = await body(request)
     try:
         accounts.upsert(store.connect(), str(d.get("name", "")), str(d.get("type", "")), d.get("balance"),
-                        d.get("apr_pct"), d.get("min_payment"), None, str(d.get("notes", "")))
+                        d.get("apr_pct"), d.get("min_payment"), None, str(d.get("notes", "")),
+                        d.get("earmarked"), str(d.get("earmark_for", "")))
     except ValueError as e:
         return err(str(e))
     return await list_accounts(request)

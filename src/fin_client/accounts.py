@@ -22,6 +22,10 @@ def init(conn: sqlite3.Connection) -> None:
             name TEXT PRIMARY KEY, type TEXT NOT NULL, balance TEXT, apr_pct TEXT,
             min_payment TEXT, as_of TEXT, notes TEXT NOT NULL DEFAULT '')"""
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
+    if "earmarked" not in cols:  # money set aside inside this account, e.g. to repay a specific debt
+        conn.execute("ALTER TABLE accounts ADD COLUMN earmarked TEXT")
+        conn.execute("ALTER TABLE accounts ADD COLUMN earmark_for TEXT NOT NULL DEFAULT ''")
 
 
 def guess_type(name: str) -> str:
@@ -56,26 +60,30 @@ def _num(x) -> Decimal | None:
 
 
 def upsert(conn: sqlite3.Connection, name: str, type_: str, balance=None, apr_pct=None, min_payment=None,
-           as_of: str | None = None, notes: str = "") -> None:
+           as_of: str | None = None, notes: str = "", earmarked=None, earmark_for: str = "") -> None:
     init(conn)
     name = name.strip()
     if not name:
         raise ValueError("Account name is required")
     if type_ not in ALL_TYPES:
         raise ValueError(f"type must be one of {ALL_TYPES}")
-    bal, apr, mn = _num(balance), _num(apr_pct), _num(min_payment)
+    bal, apr, mn, ear = _num(balance), _num(apr_pct), _num(min_payment), _num(earmarked)
+    if ear is not None and bal is not None and ear > bal:
+        raise ValueError("Set-aside amount cannot be more than the account balance")
+    if ear is not None and ear > 0 and type_ in LIABILITY_TYPES:
+        raise ValueError("Only asset accounts can have money set aside")
     if type_ in LIABILITY_TYPES and bal is not None:
         bal = abs(bal)  # always store the amount owed as a positive number
     if bal is not None and as_of is None:
         as_of = date.today().isoformat()
     conn.execute(
-        """INSERT INTO accounts (name, type, balance, apr_pct, min_payment, as_of, notes)
-           VALUES (?,?,?,?,?,?,?)
+        """INSERT INTO accounts (name, type, balance, apr_pct, min_payment, as_of, notes, earmarked, earmark_for)
+           VALUES (?,?,?,?,?,?,?,?,?)
            ON CONFLICT(name) DO UPDATE SET type=excluded.type, balance=excluded.balance,
              apr_pct=excluded.apr_pct, min_payment=excluded.min_payment, as_of=excluded.as_of,
-             notes=excluded.notes""",
+             notes=excluded.notes, earmarked=excluded.earmarked, earmark_for=excluded.earmark_for""",
         (name, type_, None if bal is None else str(bal), None if apr is None else str(apr),
-         None if mn is None else str(mn), as_of, notes),
+         None if mn is None else str(mn), as_of, notes, None if ear is None else str(ear), earmark_for or ""),
     )
     conn.commit()
 
@@ -85,8 +93,8 @@ def list_accounts(conn: sqlite3.Connection) -> list[dict]:
     stats = {r[0]: r[1:] for r in conn.execute(
         "SELECT account, COUNT(*), MIN(date), MAX(date) FROM transactions GROUP BY account")}
     out = []
-    for name, type_, bal, apr, mn, as_of, notes in conn.execute(
-        "SELECT name, type, balance, apr_pct, min_payment, as_of, notes FROM accounts ORDER BY type, name"
+    for name, type_, bal, apr, mn, as_of, notes, ear, ear_for in conn.execute(
+        "SELECT name, type, balance, apr_pct, min_payment, as_of, notes, earmarked, earmark_for FROM accounts ORDER BY type, name"
     ):
         n, first, last = stats.get(name, (0, None, None))
         out.append({"name": name, "type": type_, "label": LABELS.get(type_, type_),
@@ -94,6 +102,7 @@ def list_accounts(conn: sqlite3.Connection) -> list[dict]:
                     "balance": None if bal is None else float(bal),
                     "apr_pct": None if apr is None else float(apr),
                     "min_payment": None if mn is None else float(mn),
+                    "earmarked": None if ear is None else float(ear), "earmark_for": ear_for or "",
                     "as_of": as_of, "notes": notes, "transactions": n, "first_date": first, "last_date": last})
     return out
 
@@ -106,8 +115,19 @@ def net_worth(accts: list[dict]) -> dict:
         if a["balance"] is not None:
             by_type[a["type"]] = by_type.get(a["type"], 0) + a["balance"]
     return {"assets": round(assets, 2), "liabilities": round(liabilities, 2), "net_worth": round(assets - liabilities, 2),
+            "set_aside": round(sum(a["earmarked"] or 0 for a in accts), 2),
             "by_type": {k: round(v, 2) for k, v in by_type.items()},
             "missing_balances": [a["name"] for a in accts if a["balance"] is None]}
+
+
+def prefunded_debts(accts: list[dict]) -> dict[str, float]:
+    """Liabilities that are already covered by money set aside in an asset account (name -> amount set aside)."""
+    names = {a["name"]: a for a in accts if a["kind"] == "liability"}
+    out: dict[str, float] = {}
+    for a in accts:
+        if a["kind"] == "asset" and a.get("earmarked") and a.get("earmark_for") in names:
+            out[a["earmark_for"]] = out.get(a["earmark_for"], 0) + a["earmarked"]
+    return {k: v for k, v in out.items() if v >= (names[k]["balance"] or 0) - 0.005}
 
 
 def effective_profile(profile: dict, accts: list[dict]) -> dict:
@@ -115,9 +135,10 @@ def effective_profile(profile: dict, accts: list[dict]) -> dict:
     p = dict(profile)
     known = [a for a in accts if a["balance"] is not None]
 
+    prefunded = prefunded_debts(accts)
     debts = {d["name"]: d for d in p.get("debts", [])}
     for a in known:
-        if a["kind"] == "liability" and a["balance"] > 0 and a["apr_pct"] is not None:
+        if a["kind"] == "liability" and a["balance"] > 0 and a["apr_pct"] is not None and a["name"] not in prefunded:
             d = {"name": a["name"], "balance": a["balance"], "apr_pct": a["apr_pct"]}
             if a["min_payment"] is not None:
                 d["min_payment"] = a["min_payment"]
@@ -125,7 +146,7 @@ def effective_profile(profile: dict, accts: list[dict]) -> dict:
     if debts:
         p["debts"] = list(debts.values())
 
-    cash = [a["balance"] for a in known if a["type"] in ("checking", "savings", "cash")]
+    cash = [a["balance"] - (a["earmarked"] or 0) for a in known if a["type"] in ("checking", "savings", "cash")]
     if "cash_savings" not in p and cash:
         p["cash_savings"] = round(sum(cash), 2)
     retire = [a["balance"] for a in known if a["type"] in ("retirement", "investment")]

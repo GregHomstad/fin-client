@@ -185,16 +185,18 @@ function accountRow(a) {
   const apr = h("input", { type: "text", inputmode: "decimal", value: a.apr_pct ?? "", placeholder: "APR %", "aria-label": `${a.name} APR` });
   const min = h("input", { type: "text", inputmode: "decimal", value: a.min_payment ?? "", placeholder: "min pmt", "aria-label": `${a.name} minimum payment` });
   const type = h("select", { "aria-label": `${a.name} type` }, OV.types.map((t) => h("option", { value: t.value, selected: t.value === a.type }, t.label)));
+  const ear = h("input", { type: "text", inputmode: "decimal", value: a.earmarked ?? "", placeholder: "set aside $", "aria-label": `${a.name} money set aside` });
+  const earFor = h("select", { "aria-label": `${a.name} set aside for` }, h("option", { value: "" }, "for…"), OV.accounts.filter((x) => x.kind === "liability").map((x) => h("option", { value: x.name, selected: x.name === a.earmark_for }, x.name)));
   const save = h("button", { class: "btn small", type: "button", onclick: async () => {
     try {
-      await api("/api/accounts", { method: "POST", json: { name: a.name, type: type.value, balance: bal.value, apr_pct: apr.value, min_payment: min.value, notes: a.notes } });
+      await api("/api/accounts", { method: "POST", json: { name: a.name, type: type.value, balance: bal.value, apr_pct: apr.value, min_payment: min.value, notes: a.notes, earmarked: ear.value, earmark_for: earFor.value } });
       await loadOverview(); toast("Saved " + a.name); render();
     } catch (e) { toast(e.message, true); }
   } }, "Save");
   const debt = a.kind === "liability";
   return h("tr", {},
     h("td", {}, h("div", { style: { fontWeight: 600 } }, a.name), h("div", { class: "muted", style: { fontSize: ".78rem" } }, a.transactions ? `${a.transactions} txns · ${a.first_date} → ${a.last_date}` : "no transactions")),
-    h("td", {}, type), h("td", {}, bal), h("td", {}, debt ? apr : ""), h("td", {}, debt ? min : ""), h("td", { class: "r" }, save));
+    h("td", {}, type), h("td", {}, bal), h("td", {}, debt ? apr : ear), h("td", {}, debt ? min : earFor), h("td", { class: "r" }, save));
 }
 
 function viewAccounts() {
@@ -236,7 +238,7 @@ function viewAccounts() {
     if (!list.length) continue;
     const total = list.reduce((t, a) => t + (a.balance || 0), 0);
     root.append(h("div", { style: { marginTop: "1rem" } }, card(`${title} · ${money(total)}`, h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, ["Account", "Type", title === "Assets" ? "Balance" : "Owed", title === "Liabilities" ? "APR %" : "", title === "Liabilities" ? "Min payment" : "", ""].map((t, i) => h("th", { class: i === 5 ? "r" : "" }, t)))),
+      h("thead", {}, h("tr", {}, ["Account", "Type", title === "Assets" ? "Balance" : "Owed", title === "Liabilities" ? "APR %" : "Set aside $", title === "Liabilities" ? "Min payment" : "To repay", ""].map((t, i) => h("th", { class: i === 5 ? "r" : "" }, t)))),
       h("tbody", {}, list.map(accountRow)))))));
   }
 
