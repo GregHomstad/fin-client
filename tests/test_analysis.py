@@ -129,3 +129,18 @@ def test_stopped_is_judged_against_that_accounts_newest_data():
     t += [T(d(2026, 10, 15), "ELSEWHERE", Decimal("-1"), "Long export")]       # another account is newer
     [r] = [x for x in recurring.analyze(t)["active"] if x.merchant == "SUB SERVICE"]
     assert r.status == "active"  # last payment Aug 25 is only 7 days before ITS account's data ends, not 51
+
+
+def test_a_biller_that_changes_its_description_stays_one_recurring_payment():
+    from datetime import date as d
+
+    from fin_client.models import Transaction as T
+    t = [T(d(2026, m, 14), "PERSON NAME PAYMENT ATT", Decimal("-117.06"), "Chk") for m in (3, 4, 5, 6, 7)]
+    t += [T(d(2026, 8, 4), "WEB 123456789MYW9C PAYMENT ATT", Decimal("-121.50"), "Chk"),
+          T(d(2026, 9, 2), "WEB 123456789MYW9G PAYMENT ATT", Decimal("-122.50"), "Chk")]
+    t += [T(d(2026, 9, 30), "SOMETHING ELSE", Decimal("-5"), "Chk")]
+    got = recurring.analyze(t)
+    assert len(got["active"]) == 1 and got["active"][0].count == 7 and got["active"][0].last_date == d(2026, 9, 2)
+    assert got["stopped"] == []
+    far = [T(d(2026, 1, 5), "OLD BILLER ATT", Decimal("-50"), "Chk")] + [T(d(2026, m, 5), "NEW BILLER ATT", Decimal("-50"), "Chk") for m in (8, 9, 10)]
+    assert len(recurring._merge_aliases({("OLD BILLER ATT", False): far[:1], ("NEW BILLER ATT", False): far[1:]})) == 2  # 7 months apart: not merged

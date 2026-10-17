@@ -106,3 +106,12 @@ def test_import_pdfs_end_to_end_with_account_naming_and_skips(monkeypatch, tmp_p
     dry = pdf_import.import_pdfs(store.connect(tmp_path / "other.db"), files, {"0394": "Simmons checking"}, dry_run=True)
     assert dry["added"] == 3
     assert cli.main(["import-pdfs", str(tmp_path), "--map", "0394=Simmons checking", "--dry-run"]) == 0
+
+
+def test_page_break_headers_do_not_leak_into_descriptions():
+    lines = stmt(rows=ROWS[:1], cur="995.50")
+    lines.insert(-1, "                  Date 9/30/26   Page 2    Primary Account XXXXXXXXXXXX1234")
+    lines.insert(-1, "                  Account Number XXXXXXXXXXXX1234   Statement Dates 9/01/26 thru 9/30/26")
+    [s] = pdf_bank.parse_text(lines)
+    assert all("Primary Account" not in t.description and "Page" not in t.description for t in s.txns)
+    assert s.reconciled and "SAMPLE COFFEE SHOP" in s.txns[0].description

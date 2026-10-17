@@ -53,6 +53,40 @@ def merchant_key(description: str) -> str:
     return normalize(description, max_tokens=4)
 
 
+def _tail(key: str) -> str:
+    last = key.split()[-1] if key else ""
+    return last if len(last) >= 3 else ""
+
+
+def _merge_aliases(groups: dict[tuple[str, bool], list[Transaction]]) -> dict[tuple[str, bool], list[Transaction]]:
+    """A biller can change how it shows up (a new payment channel, a web reference instead of your name).
+
+    Groups with the same last word, similar amounts and date ranges that follow each other are one recurring payment.
+    """
+    merged = dict(groups)
+    changed = True
+    while changed:
+        changed = False
+        keys = list(merged)
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                if a not in merged or b not in merged or a[1] != b[1] or not _tail(a[0]) or _tail(a[0]) != _tail(b[0]):
+                    continue
+                ga, gb = sorted(merged[a], key=lambda t: t.date), sorted(merged[b], key=lambda t: t.date)
+                ma, mb = median([t.amount for t in ga]), median([t.amount for t in gb])
+                if not ma or abs(ma - mb) > abs(ma) * Decimal("0.15"):
+                    continue
+                first, second = (ga, gb) if ga[0].date <= gb[0].date else (gb, ga)
+                if first[-1].date <= second[0].date and (second[0].date - first[-1].date).days <= 60:
+                    merged[a] = ga + gb
+                    del merged[b]
+                    changed = True
+                    break
+            if changed:
+                break
+    return merged
+
+
 def detect(txns: list[Transaction], min_occurrences: int = 3, amount_tol: float = 0.15) -> list[Recurring]:
     """Every recurring pattern in the history. Yearly ones need only two payments about a year apart."""
     groups: dict[tuple[str, bool], list[Transaction]] = defaultdict(list)
@@ -63,6 +97,7 @@ def detect(txns: list[Transaction], min_occurrences: int = 3, amount_tol: float 
         if key:
             groups[(key, t.amount > 0)].append(t)
     overall = max(newest.values(), default=date.today())
+    groups = _merge_aliases(groups)
     found = []
     for (key, _), items in groups.items():
         if len(items) < 2:

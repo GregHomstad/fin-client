@@ -24,7 +24,7 @@ CURR = re.compile(r"(?:Current|Ending) Balance\s+(" + AMT + r")", re.I)
 TX = re.compile(r"^\s*(\d{1,2})/(\d{2})\s+(.*?)\s+(" + AMT + r")(?:\s+(" + AMT + r"))?\s*$")
 TRAILER = re.compile(r"(?:\s+\d{2}/\d{2}/\d{2})?(?:\s+\d{8}){0,2}\s*$")
 STOP = re.compile(r"(?i)^\s*(daily balance|overdraft|interest rate|annual percentage|page\s+\d|account number|statement dates|"
-                  r"date\s+description|round up|total for|summary|member fdic|\(\d\))")
+                  r"date\s+description|date\s+\d{1,2}/\d{1,2}/\d{2,4}|primary account|round up|total for|summary|member fdic|\(\d\))")
 
 
 def money(s: str) -> Decimal:
