@@ -6,7 +6,7 @@ from decimal import Decimal
 from fin_client.categorize import Rules, categorize
 from fin_client.models import Transaction
 
-EXCLUDED = {"Transfers"}  # internal movements don't count as income/spending
+EXCLUDED = {"Transfers", "Savings & Investing"}  # internal movements and saving are not spending
 
 
 @dataclass

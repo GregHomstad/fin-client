@@ -20,8 +20,9 @@ from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from fin_client import accounts, analytics, goals, labeler, recurring, report, snapshot, store
+from fin_client import accounts, analytics, goals, labeler, labels, recurring, report, snapshot, store
 from fin_client import advisor as adv
+from fin_client import ai_categorize as ai
 from fin_client.advisor import DEFAULT_MODEL, Advisor, ollama_url
 from fin_client.categorize import categorize, load_rules
 from fin_client.importers import import_file
@@ -321,6 +322,131 @@ async def goals_delete(request: Request):
     return ok(_goals_payload())
 
 
+def _cat_ctx():
+    conn, txns, rules, accts, _ = _ctx()
+    types = {a["name"]: a["label"].lower() for a in accts}
+    return conn, txns, rules, types
+
+
+def _cands(d: dict):
+    conn, txns, rules, types = _cat_ctx()
+    cands = ai.candidates(txns, labels.load_all(conn), types, bool(d.get("redo")))
+    if d.get("limit"):
+        cands = cands[:int(d["limit"])]
+    return conn, txns, rules, types, cands
+
+
+async def cat_status(request: Request):
+    conn, txns, rules, types = _cat_ctx()
+    lab = labels.load_all(conn)
+    keys = {ai.normalize(t.description) for t in txns}
+    keys.discard("")
+    mine = sum(1 for k in keys if lab.get(k, {}).get("source") == "user")
+    auto = sum(1 for k in keys if lab.get(k, {}).get("source") == "ai" and lab[k]["confidence"] >= labels.AI_MIN)
+    review = sum(1 for k in keys if lab.get(k, {}).get("source") == "ai" and lab[k]["confidence"] < labels.AI_MIN)
+    todo = ai.candidates(txns, lab, types)
+    spend = sum(abs(float(t.amount)) for t in txns if t.amount < 0) or 1
+    unc = sum(abs(float(t.amount)) for t in txns if t.amount < 0 and categorize(t.description, t.amount, rules, t.bank_category) == "Uncategorized")
+    return ok({"merchants": len(keys), "yours": mine, "ai_applied": auto, "needs_review": review, "unlabeled": len(todo),
+               "unlabeled_spend": round(sum(c["total"] for c in todo), 2), "uncategorized_pct": round(unc / spend * 100, 1),
+               "taxonomy": list(ai.TAXONOMY), "ai_min": labels.AI_MIN})
+
+
+async def cat_preview(request: Request):
+    d = await body(request)
+    conn, txns, rules, types, cands = _cands(d)
+    out = {"merchants": len(cands), "dollars": round(sum(c["total"] for c in cands), 2), "ready": adv.claude_ready()}
+    if d.get("engine") == "claude":
+        payloads = ai.claude_payloads(cands, labels.user_examples(conn), d.get("model") or None)
+        out |= {"text": ai.render_payloads(payloads), "digest": ai.payloads_digest(payloads), "requests": len(payloads),
+                "model": payloads[0]["model"] if payloads else adv.CLAUDE_MODEL}
+    return ok(out)
+
+
+async def cat_run(request: Request):
+    """Streams one JSON object per line: progress, then a final result. Claude needs the previewed digest."""
+    d = await body(request)
+    engine = "claude" if d.get("engine") == "claude" else "local"
+    conn, txns, rules, types, cands = _cands(d)
+    model = d.get("model") or None
+    if engine == "claude":
+        payloads = ai.claude_payloads(cands, labels.user_examples(conn), model)
+        if d.get("digest") != ai.payloads_digest(payloads):
+            return err("What would be sent has changed since you previewed it. Preview it again.", 409)
+        if not adv.claude_ready():
+            return err("No Anthropic credential found. Set ANTHROPIC_API_KEY and restart the dashboard.", 400)
+    else:
+        try:
+            ollama_url()
+        except RuntimeError as e:
+            return err(str(e), 400)
+    size = 40 if engine == "claude" else 15
+
+    def stream():
+        tot = {"merchants": len(cands), "saved": 0, "applied_automatically": 0, "needs_review": 0, "unparsed": 0}
+        try:
+            run_conn = store.connect()  # SQLite connections are per-thread; this generator runs in a worker thread
+            for i in range(0, len(cands), size):
+                part = ai.run(run_conn, cands[i:i + size], engine, model, size=size)
+                for k in ("saved", "applied_automatically", "needs_review", "unparsed"):
+                    tot[k] += part[k]
+                yield json.dumps({"done": min(i + size, len(cands)), "total": len(cands)}) + chr(10)
+            yield json.dumps({"result": tot}) + chr(10)
+        except Exception as e:  # noqa: BLE001
+            yield json.dumps({"error": f"{type(e).__name__}: the run stopped. Labels saved so far are kept.", "result": tot}) + chr(10)
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+async def labels_review(request: Request):
+    conn, txns, rules, types = _cat_ctx()
+    lab = labels.load_all(conn)
+    stats: dict[str, dict] = {}
+    for t in txns:
+        k = ai.normalize(t.description)
+        if k in lab:
+            e = stats.setdefault(k, {"n": 0, "total": 0.0})
+            e["n"] += 1
+            e["total"] += abs(float(t.amount))
+    rows = [{"key": k, "merchant": v["example"] or k, "category": v["category"], "confidence": round(v["confidence"], 2),
+             "source": v["source"], "model": v["model"], "n": stats.get(k, {}).get("n", 0),
+             "total": round(stats.get(k, {}).get("total", 0), 2)} for k, v in lab.items() if k in stats]
+    queue = sorted((r for r in rows if r["source"] == "ai" and r["confidence"] < labels.AI_MIN), key=lambda r: -r["total"])
+    applied = sorted((r for r in rows if r["source"] == "ai" and r["confidence"] >= labels.AI_MIN), key=lambda r: -r["total"])[:200]
+    mine = sorted((r for r in rows if r["source"] == "user"), key=lambda r: -r["total"])[:200]
+    return ok({"review": queue, "applied": applied, "yours": mine, "taxonomy": list(ai.TAXONOMY)})
+
+
+async def labels_set(request: Request):
+    d = await body(request)
+    key, cat = str(d.get("key", "")).strip(), ai.canonical(d.get("category", "")) or str(d.get("category", "")).strip()
+    if not key or not cat:
+        return err("key and category are required")
+    labels.set_label(store.connect(), key, cat, "user", 1.0, "", str(d.get("merchant", ""))[:70])
+    return ok({"saved": True})
+
+
+async def labels_delete(request: Request):
+    key = request.query_params.get("key", "")
+    if not key:
+        return err("key is required")
+    labels.delete_label(store.connect(), key)
+    return ok({"deleted": True})
+
+
+async def cat_eval(request: Request):
+    """Local-only accuracy check against the merchants you labeled (Claude evaluation is CLI-only, with a preview)."""
+    d = await body(request)
+    conn, txns, rules, types = _cat_ctx()
+    try:
+        ollama_url()
+        return ok(ai.evaluate(conn, txns, rules, types, "local", d.get("model") or None))
+    except RuntimeError as e:
+        return err(str(e))
+    except Exception as e:  # noqa: BLE001
+        return err(f"Evaluation failed: {type(e).__name__}. Is Ollama running?", 502)
+
+
 def create_app() -> Starlette:
     routes = [
         Route("/api/overview", overview), Route("/api/accounts", list_accounts),
@@ -332,6 +458,10 @@ def create_app() -> Starlette:
         Route("/api/report.pdf", report_pdf), Route("/api/ollama", ollama_models),
         Route("/api/advise", advise, methods=["POST"]), Route("/api/advise/preview", advise_preview, methods=["POST"]),
         Route("/api/claude", claude_status),
+        Route("/api/categorize/status", cat_status), Route("/api/categorize/preview", cat_preview, methods=["POST"]),
+        Route("/api/categorize/run", cat_run, methods=["POST"]), Route("/api/categorize/eval", cat_eval, methods=["POST"]),
+        Route("/api/labels/review", labels_review), Route("/api/labels", labels_set, methods=["POST"]),
+        Route("/api/labels", labels_delete, methods=["DELETE"]),
         Route("/api/goals", goals_get), Route("/api/goals", goals_add, methods=["POST"]),
         Route("/api/goals", goals_delete, methods=["DELETE"]),
         Mount("/", StaticFiles(directory=STATIC, html=True), name="static"),

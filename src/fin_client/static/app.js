@@ -470,13 +470,14 @@ async function viewPlan() {
 
 async function viewAdvisor() {
   const root = h("div", {}), [st, cl] = await Promise.all([api("/api/ollama"), api("/api/claude")]), history = [];
-  root.append(head("Advisor", "Your totals and plan results go to the advisor, never your individual transactions."));
+  root.append(head("Victor Sterling", "Your analytical wealth advisor. He sees your totals and plan results, never your individual transactions."));
   if (!OV.has_data) return root.append(emptyState("Import transactions first.")), root;
 
   let engine = "local"; // always starts local: Claude is opt-in each visit
   const models = st.models.length ? st.models : ["llama3:8b"];
   const model = h("select", { "aria-label": "Local model" }, models.map((m) => h("option", { value: m, selected: m === "llama3:8b" }, m)));
   const msgs = h("div", { class: "msgs", "aria-live": "polite" });
+  msgs.append(h("div", { class: "msg bot" }, "I'm Victor. I've read your accounts, cash flow, debts and goals, so I won't ask what I can already see. Ask me anything, or say \"build my plan\" and I'll tell you the one thing I still need to know."));
   const input = h("input", { type: "text", placeholder: "Ask about budgeting, debt, investing, taxes…", "aria-label": "Your question" });
   const send = h("button", { class: "btn accent", type: "submit" }, "Ask");
   const banner = h("div", { class: "note" });
@@ -549,7 +550,7 @@ async function viewAdvisor() {
 
   const ask = (q) => (q.trim() ? (engine === "claude" ? askClaude(q.trim()) : askLocal(q)) : null);
   const form = h("form", { class: "form-row", onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send);
-  const chips = ["What should I do with my monthly surplus?", "Should I pay off debt or invest first?", "How much should my emergency fund be?", "Am I on track for retirement?", "Where am I overspending?"];
+  const chips = ["Build my plan", "Should I pay off debt or invest first?", "What should I do with my monthly surplus?", "Am I on track for retirement?", "Where am I overspending?"];
   root.append(card(null,
     !st.running ? h("div", { class: "note", style: { marginBottom: ".8rem" } }, "Local Ollama isn't running. Start it with ", h("code", {}, "ollama serve"), " and reload.") : null,
     h("div", { class: "chips", style: { marginBottom: ".6rem" } }, engineBtns), banner,
@@ -559,8 +560,132 @@ async function viewAdvisor() {
   return root;
 }
 
+async function viewCategorize() {
+  const root = h("div", {});
+  const [st, cl] = await Promise.all([api("/api/categorize/status"), api("/api/claude")]);
+  append(root, head("Categorize", "An AI decides what each merchant is. Your corrections always win and teach the next run."));
+
+  append(root, h("div", { class: "grid cols-3" },
+    stat("Merchants", String(st.merchants), `${st.unlabeled} still unlabeled`),
+    stat("Labeled by you", String(st.yours), "always final"),
+    stat("AI, applied", String(st.ai_applied), `confidence ≥ ${Math.round(st.ai_min * 100)}%`),
+    stat("Needs your review", String(st.needs_review), "AI was unsure", st.needs_review ? "bad" : ""),
+    stat("Uncategorized spend", pct(st.uncategorized_pct), "of all spending dollars", st.uncategorized_pct > 10 ? "bad" : "good")));
+
+  // ---- run panel
+  let engine = "local";
+  const engineBtns = ["local", "claude"].map((e) => h("button", { type: "button", class: "chip", "aria-pressed": e === engine ? "true" : "false", onclick: () => pick(e) }, e === "local" ? "Local (Ollama): stays on this PC" : "Claude: stronger, you approve what is sent"));
+  const redo = h("input", { type: "checkbox", id: "redo" }), limit = h("input", { type: "text", inputmode: "numeric", placeholder: "all", "aria-label": "Only the biggest N merchants" });
+  const model = h("input", { type: "text", placeholder: "llama3:8b", "aria-label": "Model" });
+  const bar = h("div", { class: "split", hidden: true }, h("i", { style: { width: "0%", background: "var(--s1)" } }));
+  const msg = h("p", { class: "fine" });
+  const go = h("button", { class: "btn accent", type: "button" }, `Categorize ${st.unlabeled} merchants`);
+  const note = h("div", { class: "note", style: { margin: ".6rem 0" } });
+  function pick(e) {
+    engine = e;
+    engineBtns.forEach((b, i) => b.setAttribute("aria-pressed", ["local", "claude"][i] === e ? "true" : "false"));
+    model.placeholder = e === "local" ? "llama3:8b" : cl.model;
+    note.replaceChildren(e === "local" ? "Local mode: merchant names never leave this computer. Small local models are decent, not great, on obscure merchants: check the review queue."
+      : h("span", {}, "Claude mode: only merchant text, counts, typical amounts and your own labels are sent, after you review the exact requests. No account names or numbers. ",
+        !cl.ready ? h("b", { class: "bad" }, "No credential found: set ANTHROPIC_API_KEY and restart the dashboard. ") : null,
+        !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
+  }
+  pick("local");
+
+  async function runNow(extra) {
+    go.disabled = true; bar.hidden = false; msg.textContent = "Working… labels are saved as each batch finishes.";
+    try {
+      const res = await api("/api/categorize/run", { method: "POST", raw: true, json: { engine, model: model.value.trim() || undefined, redo: redo.checked, limit: limit.value ? Number(limit.value) : undefined, ...extra } });
+      if (!res.ok) throw new Error((await res.json()).error || "Request failed");
+      const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "", last = null;
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl; while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!line) continue;
+          const o = JSON.parse(line); last = o;
+          if (o.total) bar.firstChild.style.width = `${(o.done / o.total) * 100}%`;
+          if (o.done) msg.textContent = `${o.done} of ${o.total} merchants…`;
+        }
+      }
+      if (last?.error) throw new Error(last.error);
+      const r = last.result;
+      toast(`${r.saved} labeled · ${r.needs_review} need review`); await loadOverview(); render();
+    } catch (e) { msg.textContent = e.message; toast(e.message, true); go.disabled = false; }
+  }
+
+  go.onclick = async () => {
+    if (engine === "local") return runNow({});
+    try {
+      const prev = await api("/api/categorize/preview", { method: "POST", json: { engine, model: model.value.trim() || undefined, redo: redo.checked, limit: limit.value ? Number(limit.value) : undefined } });
+      if (!prev.merchants) return toast("Nothing to categorize", true);
+      const view = h("textarea", { readonly: true, rows: 16, "aria-label": "Exact text that will be sent", style: { fontFamily: "ui-monospace, Consolas, monospace", fontSize: ".78rem" } }); view.value = prev.text;
+      const okBtn = h("button", { class: "btn accent", type: "button" }, "Send exactly this to Claude");
+      const dlg = h("dialog", { style: { border: "1px solid var(--rule-2)", borderRadius: "10px", background: "var(--card)", color: "var(--ink)", padding: "1.2rem", width: "min(780px, 94vw)" } },
+        h("h3", {}, "Review what leaves this computer"),
+        h("p", { class: "muted" }, `${prev.merchants} merchants in ${prev.requests} request(s), model ${prev.model}. Merchant text, counts and typical amounts only. No account names or numbers.`),
+        view, h("p", { class: "fine" }, `Fingerprint ${prev.digest}`),
+        h("div", { class: "form-row", style: { justifyContent: "flex-end" } }, h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Cancel"), okBtn));
+      dlg.addEventListener("close", () => dlg.remove());
+      okBtn.onclick = () => { dlg.close(); runNow({ digest: prev.digest }); };
+      document.body.append(dlg); dlg.showModal();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  append(root, h("div", { style: { marginTop: "1rem" } }, card("Run the categorizer",
+    h("div", { class: "chips", style: { marginBottom: ".6rem" } }, engineBtns), note,
+    h("div", { class: "form-row" }, h("label", { class: "f" }, "Model (optional)", model), h("label", { class: "f" }, "Only the biggest N merchants", limit),
+      h("label", { class: "f", style: { display: "flex", gap: ".5rem", alignItems: "center", flex: "1 1 220px" } }, redo, "Re-label AI guesses (never yours)"), go), bar, msg)));
+
+  // ---- review
+  const rv = await api("/api/labels/review");
+  const tab = { name: "review" };
+  const holder = h("div", {});
+  const tabs = h("div", { class: "chips", style: { marginBottom: ".6rem" } });
+  const sel = (value) => h("select", { "aria-label": "Category" }, rv.taxonomy.map((c) => h("option", { value: c, selected: c === value }, c)));
+
+  function rows(list, mode) {
+    if (!list.length) return emptyState(mode === "review" ? "Nothing waiting. Run the categorizer, or everything is already decided." : "Nothing here yet.");
+    const acceptAll = mode === "review" ? h("button", { class: "btn ghost small", type: "button", onclick: async () => {
+      if (!confirm(`Accept the AI's guess for all ${list.length} merchants as your own labels?`)) return;
+      for (const r of list) await api("/api/labels", { method: "POST", json: { key: r.key, category: r.category, merchant: r.merchant } });
+      toast("Accepted"); await loadOverview(); render();
+    } }, `Accept all ${list.length}`) : null;
+    return h("div", {}, acceptAll && h("div", { style: { marginBottom: ".5rem" } }, acceptAll),
+      h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Merchant", "Seen", "Total", mode === "yours" ? "Yours" : "AI guess", "Change to", ""].map((t, i) => h("th", { class: i === 1 || i === 2 ? "r" : "" }, t)))),
+        h("tbody", {}, list.slice(0, 120).map((r) => {
+          const c = sel(r.category);
+          const save = async (cat) => { await api("/api/labels", { method: "POST", json: { key: r.key, category: cat, merchant: r.merchant } }); toast("Saved"); await loadOverview(); render(); };
+          return h("tr", {}, h("td", {}, r.merchant), h("td", { class: "r num" }, r.n), h("td", { class: "r num" }, money(r.total)),
+            h("td", {}, mode === "yours" ? r.category : h("span", {}, r.category, " ", h("span", { class: "pill" + (r.confidence < st.ai_min ? " warn" : "") }, `${Math.round(r.confidence * 100)}%`))),
+            h("td", {}, c), h("td", { class: "r" }, h("button", { class: "btn small", type: "button", onclick: () => save(c.value) }, mode === "review" && c.value === r.category ? "Accept" : "Save")));
+        })))));
+  }
+  const lists = { review: rv.review, applied: rv.applied, yours: rv.yours };
+  const names = { review: `Needs review (${rv.review.length})`, applied: `AI applied (${rv.applied.length})`, yours: `Yours (${rv.yours.length})` };
+  function show(n) { tab.name = n; holder.replaceChildren(rows(lists[n], n)); [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", b.dataset.n === n ? "true" : "false")); }
+  Object.keys(lists).forEach((n) => tabs.append(h("button", { type: "button", class: "chip", "data-n": n, onclick: () => show(n) }, names[n])));
+  show(rv.review.length ? "review" : "applied");
+  append(root, h("div", { style: { marginTop: "1rem" } }, card("Review", h("p", { class: "fine", style: { marginTop: 0 } }, "Biggest spend first. Accepting or changing a merchant makes it your label, which beats every AI guess and is shown to the AI as an example next time."), tabs, holder)));
+
+  // ---- accuracy
+  const out = h("div", {}), evalBtn = h("button", { class: "btn", type: "button" }, "Measure accuracy (local model)");
+  evalBtn.onclick = async () => {
+    evalBtn.disabled = true; out.replaceChildren(h("p", { class: "muted" }, "Scoring the AI against merchants you labeled… this can take a minute."));
+    try {
+      const r = await api("/api/categorize/eval", { method: "POST", json: {} });
+      if (r.error) { out.replaceChildren(emptyState(r.error)); }
+      else out.replaceChildren(h("div", { class: "grid cols-3" }, stat("AI accuracy", pct(r.ai_accuracy), `${r.n} merchants you labeled`), stat("Rules + bank labels", pct(r.rules_only_accuracy), "the old method"), stat("AI when confident", r.confident_accuracy == null ? "—" : pct(r.confident_accuracy), `${r.confident_n} merchants`)),
+        r.mistakes.length ? h("div", { class: "scroll", style: { marginTop: ".8rem" } }, h("table", {}, h("thead", {}, h("tr", {}, ["Merchant", "You said", "AI said", "Conf."].map((t) => h("th", {}, t)))), h("tbody", {}, r.mistakes.map((m) => h("tr", {}, h("td", {}, m.merchant), h("td", {}, m.expected), h("td", {}, m.ai), h("td", { class: "num" }, `${Math.round(m.confidence * 100)}%`)))))) : null);
+    } catch (e) { out.replaceChildren(emptyState(e.message)); }
+    evalBtn.disabled = false;
+  };
+  append(root, h("div", { style: { marginTop: "1rem" } }, card("How accurate is it?", h("p", { class: "fine", style: { marginTop: 0 } }, "Each merchant you labeled is hidden from the AI and scored. Label at least 10 first. For a Claude score, run fin-client categorize --eval --engine claude."), evalBtn, out)));
+  return root;
+}
+
 /* ---------- router ---------- */
-const VIEWS = [["overview", "Overview", viewOverview], ["accounts", "Accounts", viewAccounts], ["transactions", "Transactions", viewTransactions],
+const VIEWS = [["overview", "Overview", viewOverview], ["accounts", "Accounts", viewAccounts], ["transactions", "Transactions", viewTransactions], ["categorize", "Categorize", viewCategorize],
   ["spending", "Spending", viewSpending], ["recurring", "Recurring", viewRecurring], ["plan", "Plan", viewPlan], ["advisor", "Advisor", viewAdvisor]];
 
 function parseHash() {

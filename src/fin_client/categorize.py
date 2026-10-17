@@ -2,6 +2,8 @@
 import json
 from decimal import Decimal
 
+from fin_client import labels as labels_mod
+from fin_client.merchants import normalize
 from fin_client.paths import data_dir
 
 Rules = dict[str, list[str]]
@@ -22,6 +24,7 @@ DEFAULT_RULES: Rules = {
 
 
 BANK_CATEGORY_KEY = "_bank_categories"  # rules.json: {"_bank_categories": {"bank label": "Our Category"}}
+LABELS_KEY = "_labels"  # merchant key -> {category, source, confidence}
 USER_KEY = "_user"  # user keyword rules live here so they outrank the bank's label
 
 # Bank labels are looked up whole, then by their first segment ("Food/Alcohol" -> "food")
@@ -53,6 +56,7 @@ def load_rules() -> Rules:
     """Built-in keyword rules plus your rules.json (keywords, and optional bank-label overrides)."""
     path = data_dir() / "rules.json"
     merged: dict = {cat: list(kws) for cat, kws in DEFAULT_RULES.items()}
+    merged[LABELS_KEY] = labels_mod.load_default()
     if path.exists():
         user = json.loads(path.read_text(encoding="utf-8"))
         merged[BANK_CATEGORY_KEY] = {k.lower(): v for k, v in user.pop(BANK_CATEGORY_KEY, {}).items()}
@@ -61,12 +65,15 @@ def load_rules() -> Rules:
 
 
 def categorize(description: str, amount: Decimal, rules: Rules | None = None, bank_category: str = "") -> str:
-    """Priority: your keyword rules, the bank's own category, built-in keywords, then a fallback."""
+    """Priority: your keyword rules, merchant labels (yours, then confident AI), the bank's category, built-in keywords."""
     rules = DEFAULT_RULES if rules is None else rules
     d = description.upper()
     for cat, kws in rules.get(USER_KEY, {}).items():  # type: ignore[union-attr]
         if any(k in d for k in kws):
             return cat
+    lab = rules.get(LABELS_KEY, {}).get(normalize(description))  # type: ignore[union-attr]
+    if labels_mod.usable(lab):  # your merchant labels, then confident AI labels, then the bank's own category
+        return lab["category"]  # type: ignore[index]
     mapped = _bank_category(bank_category, rules.get(BANK_CATEGORY_KEY, {}))  # type: ignore[arg-type]
     if mapped:
         return mapped

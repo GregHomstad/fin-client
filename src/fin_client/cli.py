@@ -11,6 +11,67 @@ from fin_client.importers import import_file
 from fin_client.paths import data_dir
 
 
+def categorize_cmd(args, conn, ask=input, say=print) -> int:
+    """AI-categorize merchants. Claude sends merchant text only, after you review the exact requests."""
+    from fin_client import accounts, ai_categorize as ai, labels
+    txns = store.all_transactions(conn)
+    rules = load_rules()
+    types = {a["name"]: a["label"].lower() for a in accounts.list_accounts(conn)}
+    if args.eval:
+        if args.engine == "claude":
+            from fin_client import advisor as adv
+            if not adv.claude_ready():
+                print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+                return 1
+            prev = ai.evaluate(conn, txns, rules, types, "claude", args.model, preview_only=True)
+            if "error" in prev:
+                say(prev["error"])
+                return 1
+            say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC (merchants you labeled, plus your labels as examples) ---")
+            say(ai.render_payloads(prev["payloads"]))
+            say("--- END ---")
+            if ask("Send to Claude? [y/N] ").strip().lower() not in ("y", "yes"):
+                say("Not sent.")
+                return 0
+        res = ai.evaluate(conn, txns, rules, types, args.engine, args.model)
+        if "error" in res:
+            say(res["error"])
+            return 1
+        say(f"{res['engine']} / {res['model']} on {res['n']} merchants you labeled:")
+        say(f"  AI accuracy            {res['ai_accuracy']}%")
+        say(f"  rules + bank labels    {res['rules_only_accuracy']}%")
+        if res["confident_accuracy"] is not None:
+            say(f"  AI when confident      {res['confident_accuracy']}% ({res['confident_n']} merchants)")
+        for m in res["mistakes"][:10]:
+            say(f"  miss: {m['merchant']:<32} you said {m['expected']:<18} AI said {m['ai']} ({m['confidence']:.2f})")
+        return 0
+    cands = ai.candidates(txns, labels.load_all(conn), types, args.redo)
+    if args.limit:
+        cands = cands[:args.limit]
+    if not cands:
+        say("Every merchant already has a label.")
+        return 0
+    say(f"{len(cands)} merchants to categorize ({sum(c['total'] for c in cands):,.0f} dollars of activity).")
+    examples = labels.user_examples(conn)
+    if args.engine == "claude":
+        from fin_client import advisor as adv
+        if not adv.claude_ready():
+            print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+            return 1
+        payloads = ai.claude_payloads(cands, examples, args.model)
+        say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC (merchant text, no account numbers, no raw transactions) ---")
+        say(ai.render_payloads(payloads))
+        say(f"--- END: {len(payloads)} request(s), fingerprint {ai.payloads_digest(payloads)} ---")
+        if ask("Send to Claude? [y/N] ").strip().lower() not in ("y", "yes"):
+            say("Not sent.")
+            return 0
+    res = ai.run(conn, cands, args.engine, args.model, examples, lambda d, t: say(f"  {d}/{t} merchants"))
+    say(f"Done: {res['saved']} labels saved, {res['applied_automatically']} applied automatically (confidence >= {labels.AI_MIN}), "
+        f"{res['needs_review']} waiting for your review, {res['unparsed']} the model skipped.")
+    say("Review and correct them in the dashboard (Transactions, AI review). Your corrections teach the next run.")
+    return 0
+
+
 def claude_chat(snap: dict, include_merchants: bool, ask=input, say=print) -> int:
     """Chat with Claude. Every send is previewed in full and needs a typed 'y'."""
     from fin_client import advisor as adv
@@ -74,6 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     db = sub.add_parser("dashboard", help="Start the local web dashboard (127.0.0.1 only)")
     db.add_argument("--port", type=int, default=8780)
     db.add_argument("--no-browser", action="store_true")
+    cat = sub.add_parser("categorize", help="Categorize every merchant with AI (local Ollama by default)")
+    cat.add_argument("--engine", choices=["local", "claude"], default="local")
+    cat.add_argument("--model", help="Model name (default: llama3:8b locally, claude-opus-5-5 for Claude)")
+    cat.add_argument("--limit", type=int, help="Only the N biggest merchants")
+    cat.add_argument("--redo", action="store_true", help="Re-label merchants the AI already labeled (yours are never touched)")
+    cat.add_argument("--eval", action="store_true", help="Measure accuracy against the merchants you labeled")
     sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
@@ -109,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "categorize":
+        return categorize_cmd(args, conn)
     elif args.cmd == "label":
         from fin_client import labeler
         try:
