@@ -25,13 +25,23 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _goals_plan(conn, essential: float, surplus: float) -> dict | None:
+    """Goal-based action plan, trimmed for the advisor (no month-by-month series)."""
+    if conn is None:
+        return None
+    from fin_client import accounts, goals
+    plan = goals.build_plan(goals.list_goals(conn), accounts.list_accounts(conn), essential, surplus)
+    plan.pop("timeline", None)
+    return plan
+
+
 def profile_for(conn) -> dict:
     """profile.json merged with what the accounts already know (debts, cash, retirement balances)."""
     from fin_client import accounts
     return accounts.effective_profile(load_profile(), accounts.list_accounts(conn))
 
 
-def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | None = None) -> dict:
+def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | None = None, conn=None) -> dict:
     months = analytics.cashflow(txns, rules)
     if not months:
         return {"error": "No transactions imported yet."}
@@ -78,6 +88,7 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
              "net": _f(m.net)} for m in months
         ],
         "planning": plan,
+        "goals_plan": _goals_plan(conn, _f(essential), _f(avg["avg_net"])),
         "paycheck_reconciliation": recon,
         "user_profile": profile or {},
         "notes": ["Internal transfers are excluded from income and spending.",

@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date
 
         from fin_client import report
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn), conn)
         if "error" in snap:
             print(snap["error"], file=sys.stderr)
             return 1
@@ -130,13 +130,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
     elif args.cmd == "plan":
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn), conn)
         if "error" in snap:
             print(snap["error"], file=sys.stderr)
             return 1
         print(json.dumps(snap["planning"], indent=1))
     elif args.cmd == "advise":
-        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn))
+        snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn), conn)
         if args.show_context:
             print(json.dumps(snap, indent=1))
             return 0

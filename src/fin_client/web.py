@@ -20,7 +20,7 @@ from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from fin_client import accounts, analytics, labeler, recurring, report, snapshot, store
+from fin_client import accounts, analytics, goals, labeler, recurring, report, snapshot, store
 from fin_client import advisor as adv
 from fin_client.advisor import DEFAULT_MODEL, Advisor, ollama_url
 from fin_client.categorize import categorize, load_rules
@@ -90,7 +90,7 @@ def _month(m: analytics.Month) -> dict:
 async def overview(request: Request):
     conn, txns, rules, accts, profile = _ctx()
     months = analytics.cashflow(txns, rules)
-    snap = snapshot.build(txns, rules, profile)
+    snap = snapshot.build(txns, rules, profile, conn)
     unc = labeler.uncategorized_merchants(txns, rules)
     return ok({
         "accounts": accts, "net_worth": accounts.net_worth(accts),
@@ -202,8 +202,8 @@ async def import_upload(request: Request):
 
 
 async def report_pdf(request: Request):
-    _, txns, rules, _, profile = _ctx()
-    snap = snapshot.build(txns, rules, profile)
+    conn, txns, rules, _, profile = _ctx()
+    snap = snapshot.build(txns, rules, profile, conn)
     if "error" in snap:
         return err(snap["error"])
     out = report.build_pdf(snap, data_dir() / "reports" / f"fin-client-report-{date.today():%Y-%m-%d}.pdf")
@@ -220,8 +220,8 @@ async def ollama_models(request: Request):
 
 
 def _advise_snapshot():
-    _, txns, rules, _, profile = _ctx()
-    return snapshot.build(txns, rules, profile)
+    conn, txns, rules, _, profile = _ctx()
+    return snapshot.build(txns, rules, profile, conn)
 
 
 def _claude_payload(d: dict, snap: dict) -> dict:
@@ -289,6 +289,38 @@ async def advise(request: Request):
     return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
 
 
+def _goals_payload() -> dict:
+    conn, txns, rules, accts, profile = _ctx()
+    mine = goals.list_goals(conn)
+    snap = snapshot.build(txns, rules, profile, conn)
+    plan = None
+    if "error" not in snap:
+        plan = goals.build_plan(mine, accts, snap["essential_spending_per_month"], snap["monthly_averages"]["net"])
+    return {"goals": mine, "plan": plan, "kinds": [{"value": k, "label": v} for k, v in goals.KINDS.items()]}
+
+
+async def goals_get(request: Request):
+    return ok(_goals_payload())
+
+
+async def goals_add(request: Request):
+    d = await body(request)
+    try:
+        goals.add_goal(store.connect(), str(d.get("kind", "")), str(d.get("name", "")), d.get("target"), d.get("target_date"),
+                       d.get("current"), d.get("months"), d.get("monthly"), int(d.get("priority") or 50))
+    except ValueError as e:
+        return err(str(e))
+    return ok(_goals_payload())
+
+
+async def goals_delete(request: Request):
+    try:
+        goals.delete_goal(store.connect(), int(request.query_params.get("id", "")))
+    except ValueError:
+        return err("id is required")
+    return ok(_goals_payload())
+
+
 def create_app() -> Starlette:
     routes = [
         Route("/api/overview", overview), Route("/api/accounts", list_accounts),
@@ -300,6 +332,8 @@ def create_app() -> Starlette:
         Route("/api/report.pdf", report_pdf), Route("/api/ollama", ollama_models),
         Route("/api/advise", advise, methods=["POST"]), Route("/api/advise/preview", advise_preview, methods=["POST"]),
         Route("/api/claude", claude_status),
+        Route("/api/goals", goals_get), Route("/api/goals", goals_add, methods=["POST"]),
+        Route("/api/goals", goals_delete, methods=["DELETE"]),
         Mount("/", StaticFiles(directory=STATIC, html=True), name="static"),
     ]
     app = Starlette(routes=routes)

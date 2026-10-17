@@ -335,8 +335,95 @@ const PROFILE_FIELDS = [
   ["expected_return_pct", "Expected return %", "number"], ["inflation_pct", "Inflation %", "number"],
 ];
 
+const ymLabel = (ym) => (ym ? monthLabel(ym) : "—");
+
+function timelineChart(tl) {
+  const pts = tl.slice(0, 72), W = 720, H = 240, L = 56, R = 12, T = 14, B = 30;
+  const series = [
+    ["Debt remaining", "var(--s2)", (t) => t.debt],
+    ["Saved (emergency fund + goals)", "var(--s1)", (t) => t.emergency_fund + t.savings],
+  ];
+  const max = niceMax(Math.max(...pts.flatMap((t) => series.map((s) => s[2](t))), 1));
+  const iw = W - L - R, ih = H - T - B, x = (i) => L + (pts.length > 1 ? (i / (pts.length - 1)) * iw : 0), y = (v) => T + ih - (v / max) * ih;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Projected debt and savings by month", style: { width: "100%", height: "auto" } });
+  const g = sv("g", { class: "grid" });
+  for (let i = 0; i <= 4; i++) { const v = (max / 4) * i; g.append(sv("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }), sv("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, v >= 1000 ? `$${+(v / 1000).toFixed(1)}k` : `$${v}`)); }
+  svg.append(g);
+  pts.forEach((t, i) => { if (i % Math.ceil(pts.length / 8) === 0) svg.append(sv("text", { x: x(i), y: H - 10, "text-anchor": "middle" }, monthLabel(t.month))); });
+  series.forEach(([, color, f]) => svg.append(sv("polyline", { points: pts.map((t, i) => `${x(i)},${y(f(t))}`).join(" "), fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" })));
+  const hit = sv("rect", { x: L, y: T, width: iw, height: ih, fill: "transparent" });
+  hit.addEventListener("pointerleave", hideTip);
+  hit.addEventListener("pointermove", (e) => {
+    const r = svg.getBoundingClientRect(), px = ((e.clientX - r.left) / r.width) * W, i = Math.max(0, Math.min(pts.length - 1, Math.round(((px - L) / iw) * (pts.length - 1))));
+    const t = pts[i]; showTip(e, [monthLabel(t.month), `Debt ${money(t.debt)}`, `Saved ${money(t.emergency_fund + t.savings)}`, t.invested ? `Invested so far ${money(t.invested)}` : ""].filter(Boolean));
+  });
+  svg.append(hit, sv("line", { class: "axis", x1: L, x2: W - R, y1: y(0), y2: y(0) }));
+  return svg;
+}
+
+const append = (el, ...kids) => { for (const k of kids.flat(Infinity)) if (k != null && k !== false) el.append(k.nodeType ? k : String(k)); };
+
+function goalsSection(gp) {
+  const root = h("div", { style: { marginBottom: "1.4rem" } }), plan = gp.plan;
+  const reload = async () => { await loadOverview(); render(); };
+
+  // add form
+  const kind = h("select", { "aria-label": "Goal type" }, gp.kinds.map((k) => h("option", { value: k.value, selected: k.value === "savings" }, k.label)));
+  const name = h("input", { type: "text", placeholder: "e.g. Car, Down payment", "aria-label": "Goal name" });
+  const target = h("input", { type: "text", inputmode: "decimal", placeholder: "target $", "aria-label": "Target amount" });
+  const date = h("input", { type: "date", "aria-label": "Target date" });
+  const cur = h("input", { type: "text", inputmode: "decimal", placeholder: "saved so far $", "aria-label": "Saved so far" });
+  const months = h("input", { type: "text", inputmode: "decimal", placeholder: "months of essentials (3)", "aria-label": "Months of essentials" });
+  const monthly = h("input", { type: "text", inputmode: "decimal", placeholder: "max per month $", "aria-label": "Monthly cap" });
+  const fieldsFor = { savings: [target, date, cur], emergency_fund: [months, target, date], debt_free: [date], invest: [monthly] };
+  const dyn = h("div", { class: "form-row", style: { flex: "3 1 380px" } });
+  const labels = new Map([[target, "Target $"], [date, "By when"], [cur, "Saved so far $"], [months, "Months of essentials"], [monthly, "Max per month $"]]);
+  const refreshFields = () => dyn.replaceChildren(...fieldsFor[kind.value].map((el) => h("label", { class: "f" }, labels.get(el), el)));
+  kind.addEventListener("change", refreshFields); refreshFields();
+  const add = h("button", { class: "btn accent", type: "button", onclick: async () => {
+    try {
+      await api("/api/goals", { method: "POST", json: { kind: kind.value, name: name.value, target: target.value, target_date: date.value, current: cur.value, months: months.value, monthly: monthly.value } });
+      toast("Goal added"); await reload();
+    } catch (e) { toast(e.message, true); }
+  } }, "Add goal");
+
+  append(root, h("div", { class: "eyebrow" }, "Planning"), h("h2", {}, "Goals & action plan"));
+  if (!plan) { append(root, card(null, emptyState("Import transactions to build a plan."))); return root; }
+
+  const total = plan.this_month.reduce((t, a) => t + a.amount, 0);
+  const thisMonth = card("Next month: where your surplus goes",
+    plan.this_month.length ? h("ul", { class: "list" }, plan.this_month.map((a) => h("li", {}, a.bucket, h("b", { class: "num" }, money(a.amount)))), h("li", {}, h("span", { class: "muted" }, `of ${money(plan.monthly_surplus)} average monthly surplus`), h("b", { class: "num" }, money(total)))) : emptyState(plan.monthly_surplus > 0 ? "Everything is funded. Consider adding a goal." : "No surplus to allocate yet."),
+    h("p", { class: "fine" }, "Order: " + plan.order.join(" → ")));
+
+  const goalCards = gp.goals.map((g) => {
+    const pg = plan.goals.find((x) => x.id === g.id) || {};
+    const pctDone = pg.target && pg.current != null ? Math.min(100, (pg.current / pg.target) * 100) : null;
+    const pill = pg.status === "on track" ? h("span", { class: "pill" }, "On track") : pg.status === "behind" ? h("span", { class: "pill warn alert" }, `Behind${pg.months_late ? ` by ${pg.months_late} mo` : ""}`) : pg.status ? h("span", { class: "pill" }, cap(pg.status)) : null;
+    return h("div", { class: "card" },
+      h("header", {}, h("div", {}, h("div", { class: "eyebrow" }, g.kind_label), h("h3", {}, g.name)), h("button", { class: "btn ghost small", type: "button", "aria-label": `Remove ${g.name}`, onclick: async () => { await api(`/api/goals?id=${g.id}`, { method: "DELETE" }); await reload(); } }, "Remove")),
+      pctDone != null ? h("div", { class: "split", "aria-hidden": "true" }, h("i", { style: { width: `${pctDone}%`, background: "var(--s1)" } })) : null,
+      h("ul", { class: "list" },
+        pg.target ? h("li", {}, "Target", h("b", { class: "num" }, money(pg.target))) : null,
+        pg.current != null && pg.kind !== "debt_free" ? h("li", {}, "Have now", h("b", { class: "num" }, money(pg.current))) : null,
+        g.target_date ? h("li", {}, "Wanted by", h("b", {}, ymLabel(g.target_date.slice(0, 7)))) : null,
+        h("li", {}, "Projected", h("b", {}, pg.eta ? ymLabel(pg.eta) : pg.note || "not within 10 years")),
+        pg.required_monthly != null ? h("li", {}, "Needed per month for your date", h("b", { class: "num" }, money(pg.required_monthly))) : null),
+      pill);
+  });
+
+  const miles = plan.milestones.length ? h("ul", { class: "list" }, plan.milestones.slice(0, 14).map((m) => h("li", {}, m.label, h("b", {}, ymLabel(m.date))))) : h("p", { class: "muted" }, "No milestones yet.");
+  append(root, 
+    h("div", { class: "grid cols-2" }, thisMonth, card("Milestones", miles, plan.debt_free ? h("p", { class: "fine" }, `Debt free around ${ymLabel(plan.debt_free)} at this pace.`) : null)),
+    h("div", { style: { marginTop: "1rem" } }, card("Projection", timelineChart(plan.timeline), h("div", { class: "legend", style: { marginTop: ".4rem" } }, h("span", { style: { "--c": "var(--s2)" } }, "Debt remaining"), h("span", { style: { "--c": "var(--s1)" } }, "Saved (emergency fund + goals)")))),
+    gp.goals.length ? h("div", { class: "grid cols-3", style: { marginTop: "1rem" } }, goalCards) : null,
+    h("div", { style: { marginTop: "1rem" } }, card("Add a goal", h("div", { class: "form-row" }, h("label", { class: "f" }, "Type", kind), h("label", { class: "f" }, "Name", name), dyn, add))),
+    [...plan.warnings.map((w) => h("div", { class: "note bad", style: { marginTop: ".8rem" } }, w)),
+      plan.assumptions.length ? h("div", { style: { marginTop: ".8rem" } }, card("Assumptions", h("ul", { class: "list" }, plan.assumptions.map((a) => h("li", {}, a))))) : null]);
+  return root;
+}
+
 async function viewPlan() {
-  const root = h("div", {}), pr = await api("/api/profile"), s = OV.snapshot, p = s?.planning;
+  const root = h("div", {}), [pr, gp] = await Promise.all([api("/api/profile"), api("/api/goals")]), s = OV.snapshot, p = s?.planning;
   root.append(head("Plan", "Debt, emergency fund, retirement and taxes. Every number is computed in code, not guessed by the model."));
 
   const inputs = {};
@@ -358,6 +445,7 @@ async function viewPlan() {
   } }, "Save profile");
 
   if (!s) return root.append(emptyState("Import transactions to see your plan.")), root;
+  root.append(goalsSection(gp));
   const sections = [];
   const ef = p.emergency_fund;
   sections.push(card("Emergency fund", h("ul", { class: "list" },

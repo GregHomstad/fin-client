@@ -50,6 +50,9 @@ Planning results are computed in code and given to the model as facts, in today'
 ## Claude as advisor (opt-in)
 Default is the local Ollama model. For stronger reasoning, `pip install -e ".[claude]"`, set `ANTHROPIC_API_KEY` in the shell that starts the app, and choose Claude on the Advisor page or run `fin-client advise --claude`. Every send shows the exact request first (model `claude-opus-5-5` by default; override with `FIN_CLIENT_CLAUDE_MODEL`). Only aggregates are sent, with account and merchant names hidden. Educational guidance, not licensed advice.
 
+## Goals and action plan
+On the dashboard's Plan page, add goals (emergency fund, savings goal with a date, debt free, investing). A local waterfall turns your average monthly surplus into a month-by-month plan: starter emergency fund, debts above 8% APR, emergency fund target, your dated goals, remaining debts, then investing. It shows next month's allocation, milestones, whether each dated goal is on track (and the monthly amount needed if not), and a projection chart. Account balances, APRs and minimum payments come from the Accounts page; missing ones are flagged as assumptions. The plan is also part of what the advisor sees. Educational planning, not financial advice.
+
 ## Dashboard
 `fin-client dashboard` serves a local web UI (Overview, Accounts, Transactions, Spending, Recurring, Plan, Advisor) on 127.0.0.1 only. It consolidates checking, savings, credit cards, loans and investments: import each export, type in balances for net worth, and card payments from checking are matched to the card's payment so spending is not double counted. No third-party requests (system fonts, hand-drawn charts, strict CSP), Host/Origin checks, and nothing is cached.
 
