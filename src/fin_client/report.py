@@ -8,8 +8,9 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from fin_client.mdlite import to_flowables
 from fin_client.paths import REPO_ROOT
 
 INK, MUTED, ACCENT, GRID = colors.HexColor("#1f2937"), colors.HexColor("#6b7280"), colors.HexColor("#2563eb"), colors.HexColor("#e5e7eb")
@@ -63,7 +64,7 @@ def _chart(history):
     return d
 
 
-def build_pdf(snap: dict, out: Path) -> Path:
+def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_label: str = "") -> Path:
     out = check_output_path(out)
     ss = getSampleStyleSheet()
     h1, h2, body = ss["Title"], ss["Heading2"], ss["BodyText"]
@@ -75,6 +76,16 @@ def build_pdf(snap: dict, out: Path) -> Path:
     story += [Paragraph("Personal Finance Report", h1),
               Paragraph(f"Generated {date.today():%B %d, %Y} &middot; data {p['first_month']} to {p['last_month']} "
                         f"({p['months_in_averages']} full months in averages)", small), Spacer(1, 8)]
+
+    if narrative:
+        bullet = ss["BodyText"].clone("bullet", leftIndent=12, firstLineIndent=-8, spaceAfter=2)
+        h3 = ss["Heading3"]
+        story.append(Paragraph("Victor's wealth plan", h2))
+        story.append(Paragraph(f"AI-written narrative{' (' + narrative_label + ')' if narrative_label else ''}. The tables that follow "
+                               "are computed by code from your own data: check every figure here against them.", small))
+        story += to_flowables(narrative, {"h2": h2, "h3": h3, "body": body, "bullet": bullet})
+        story.append(PageBreak())
+        story.append(Paragraph("The numbers behind the plan", h1))
 
     rate = f"{avg['savings_rate_pct']:.1f}%" if avg.get("savings_rate_pct") is not None else "-"
     story.append(_table([["Monthly average", ""],
@@ -164,6 +175,26 @@ def build_pdf(snap: dict, out: Path) -> Path:
                                 [2.8 * inch, 1.0 * inch, 1.0 * inch, 1.1 * inch]))
         for w in tx["warnings"]:
             story.append(Paragraph(f"Warning: {w}", small))
+
+    gp = snap.get("goals_plan")
+    if gp:
+        story.append(Paragraph("Goals and action plan", h2))
+        if gp["this_month"]:
+            story.append(_table([["Next month's surplus goes to", "Amount"]] + [[a["bucket"], money(a["amount"])] for a in gp["this_month"]],
+                                [3.6 * inch, 2.2 * inch]))
+        if gp["goals"]:
+            story.append(Spacer(1, 6))
+            story.append(_table([["Goal", "Target", "Wanted by", "Projected", "Status"]] +
+                                [[g["name"], money(g["target"]) if g.get("target") else "-", (g.get("target_date") or "-")[:7],
+                                  g.get("eta") or "-", g.get("status", "")] for g in gp["goals"]],
+                                [1.9 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch]))
+        if gp["milestones"]:
+            story.append(Spacer(1, 6))
+            story.append(_table([["Milestone", "When"]] + [[m["label"], m["date"]] for m in gp["milestones"][:14]], [4.4 * inch, 1.4 * inch]))
+        if gp.get("debt_free"):
+            story.append(Paragraph(f"Debt free around {gp['debt_free']} at this pace.", small))
+        for a in gp["assumptions"] + gp["warnings"]:
+            story.append(Paragraph(f"Note: {a}", small))
 
     rec = snap.get("paycheck_reconciliation")
     if rec:

@@ -46,3 +46,13 @@ PERSONA_PROMPT = VICTOR + APP_RULES + "\nSNAPSHOT:\n"
 
 GREETING = ("I'm Victor. I've read your accounts, cash flow, debts and goals, so I won't ask what I can already see. "
             "Ask me anything, or say \"build my plan\" and I'll tell you the one thing I still need to know.")
+
+PLAN_REQUEST = (
+    "Build my full wealth maximization plan now, using only the SNAPSHOT as my discovery data. Follow your plan format: "
+    "(1) a concise executive summary with the core recommendations and projected outcomes; (2) the risk level appropriate "
+    "for me and how to manage it; (3) a prioritized timeline with Short Term, Medium Term and Long Term sections, each action "
+    "marked by impact and urgency, with the highest-urgency items first; (4) the tax strategies that apply to me, naming the "
+    "authority guidance to check; (5) benchmarks to track; (6) the assumptions behind every projection. Quote the computed "
+    "planning, tax and goals_plan numbers exactly; do not invent any figure or citation. If something critical is missing, list "
+    "the missing items and end by asking me the single most important question. End with your disclaimer."
+)

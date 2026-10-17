@@ -72,6 +72,62 @@ def categorize_cmd(args, conn, ask=input, say=print) -> int:
     return 0
 
 
+def fullplan_cmd(args, conn, ask=input, say=print) -> int:
+    """Build Victor's full plan as a PDF. The narrative is written locally (Ollama) unless you approve Claude."""
+    from datetime import date
+
+    from fin_client import advisor as adv
+    from fin_client import report
+    from fin_client.persona import PLAN_REQUEST
+    snap = snapshot.build(store.all_transactions(conn), load_rules(), snapshot.profile_for(conn), conn)
+    if "error" in snap:
+        print(snap["error"], file=sys.stderr)
+        return 1
+    narrative, label = None, ""
+    if args.narrative == "local":
+        try:
+            adv.ollama_url()
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        model = args.model or adv.DEFAULT_MODEL
+        say(f"Writing the plan with {model} on this PC (a minute or two)...")
+        try:
+            narrative = "".join(adv.Advisor(snap, model).ask(PLAN_REQUEST))
+        except Exception as e:  # noqa: BLE001
+            print(f"error: could not reach Ollama ({type(e).__name__}). Start it with: ollama serve", file=sys.stderr)
+            return 1
+        label = f"{model}, local"
+    elif args.narrative == "claude":
+        if not adv.claude_ready():
+            print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY.", file=sys.stderr)
+            return 1
+        payload = adv.build_claude_payload(snap, [], PLAN_REQUEST, args.include_merchants, args.model)
+        say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC ---")
+        say(adv.render_payload(payload))
+        say("--- END ---")
+        if ask(f"Send to Claude ({payload['model']})? [y/N] ").strip().lower() not in ("y", "yes"):
+            say("Not sent. Re-run with --narrative local or none.")
+            return 0
+        say("Writing the plan with Claude...")
+        try:
+            narrative = "".join(adv.claude_stream(payload))
+        except Exception as e:  # noqa: BLE001
+            print(f"error: Claude request failed ({type(e).__name__}).", file=sys.stderr)
+            return 1
+        label = f"{payload['model']}, cloud, approved by you"
+    out = args.out or data_dir() / "reports" / f"fin-client-full-plan-{date.today():%Y-%m-%d}.pdf"
+    try:
+        path = report.build_pdf(snap, out, narrative, label)
+    except (RuntimeError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if narrative:
+        path.with_suffix(".md").write_text(narrative, encoding="utf-8")
+    say(f"Wrote {path}")
+    return 0
+
+
 def claude_chat(snap: dict, include_merchants: bool, ask=input, say=print) -> int:
     """Chat with Claude. Every send is previewed in full and needs a typed 'y'."""
     from fin_client import advisor as adv
@@ -141,6 +197,11 @@ def main(argv: list[str] | None = None) -> int:
     cat.add_argument("--limit", type=int, help="Only the N biggest merchants")
     cat.add_argument("--redo", action="store_true", help="Re-label merchants the AI already labeled (yours are never touched)")
     cat.add_argument("--eval", action="store_true", help="Measure accuracy against the merchants you labeled")
+    fp = sub.add_parser("fullplan", help="Victor's full wealth plan as a PDF (local narrative by default)")
+    fp.add_argument("--narrative", choices=["local", "claude", "none"], default="local")
+    fp.add_argument("--model", help="Model name for the narrative")
+    fp.add_argument("--include-merchants", action="store_true", help="With claude: also send recurring merchant names")
+    fp.add_argument("--out", type=Path, help="Output PDF path (must be outside the repo)")
     sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
@@ -176,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "fullplan":
+        return fullplan_cmd(args, conn)
     elif args.cmd == "categorize":
         return categorize_cmd(args, conn)
     elif args.cmd == "label":
