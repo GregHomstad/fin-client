@@ -34,7 +34,10 @@ def cashflow(txns: list[Transaction], rules: Rules | None = None) -> list[Month]
         if cat in EXCLUDED:
             continue
         m = months.setdefault(t.date.isoformat()[:7], Month(t.date.isoformat()[:7]))
-        if t.amount > 0:
+        if t.amount > 0 and cat != "Income" and cat != "Uncategorized":
+            m.spending -= t.amount  # a refund or return offsets the category it came from
+            m.by_category[cat] -= t.amount
+        elif t.amount > 0:
             m.income += t.amount
         else:
             m.spending += -t.amount

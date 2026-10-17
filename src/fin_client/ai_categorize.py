@@ -41,6 +41,7 @@ TAXONOMY = {
     "Debt Payments": "payments to lenders, loan servicers, credit card issuers, collections",
     "Cash & ATM": "ATM withdrawals, cash back",
     "Transfers": "moving money between the person's own accounts, peer-to-peer to oneself",
+    "Alcohol & Tobacco": "liquor stores, tobacco, vape and smoke shops (bars and pubs are Dining)",
     "Savings & Investing": "deposits to savings, brokerage, retirement accounts",
     "Income": "paychecks, direct deposits, refunds, interest earned, reimbursements",
     "Taxes": "income tax, property tax, vehicle tax, tax preparers",

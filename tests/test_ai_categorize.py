@@ -169,3 +169,19 @@ def test_cli_categorize_local_and_claude_gate(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert cli.main(["categorize", "--engine", "claude", "--redo"]) == 1
     assert "credential" in capsys.readouterr().err
+
+
+def test_normalize_drops_order_ids_and_bank_noise():
+    assert normalize("AMAZON MKTPL*5L2110NU1 DDA PIN POS PUR 0912") == "AMAZON MKTPL"
+    assert normalize("Prime Video *YG6RE68Z3 DDA PIN POS PUR") == "PRIME VIDEO" == normalize("Prime Video *5X95W0VP2")
+    assert normalize("ROCKLAHOMA* ROCKLAHOMA DDA PIN POS PUR") == "ROCKLAHOMA"
+    assert normalize("SHELL SERVICE STATION DDA PIN POS PUR CD8276 FAYETTEVILLE AR") == "SHELL SERVICE STATION"
+    assert normalize("WALMART.COM # PIN POS RTN TO DDA") == "WALMART"
+
+
+def test_refunds_offset_their_category_instead_of_counting_as_income():
+    from fin_client import analytics
+    t = [tx("PAYROLL", "1000", bank="Income"), tx("WALMART SUPERCENTER", "-50", bank="Shopping"),
+         tx("WALMART SUPERCENTER RTN", "10", bank="Shopping", d=5)]
+    m = analytics.cashflow(t, {**DEFAULT_RULES})[0]
+    assert m.income == 1000 and m.spending == 40 and m.by_category["Shopping"] == 40
