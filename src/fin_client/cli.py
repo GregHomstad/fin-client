@@ -204,6 +204,11 @@ def main(argv: list[str] | None = None) -> int:
     fp.add_argument("--out", type=Path, help="Output PDF path (must be outside the repo)")
     tp = sub.add_parser("transactions", help="PDF of every transaction with categories and a data-coverage page")
     tp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
+    ip = sub.add_parser("import-pdfs", help="Import bank statement PDFs (only statements that reconcile to the penny)")
+    ip.add_argument("paths", nargs="+", help="PDF files or a folder of PDFs")
+    ip.add_argument("--map", action="append", default=[], metavar="LAST4=NAME",
+                    help='Name an account by its last 4 digits, e.g. --map 0394="Simmons checking"')
+    ip.add_argument("--dry-run", action="store_true", help="Show what would be imported without saving")
     sub.add_parser("label", help="Interactively categorize uncategorized merchants (saves rules.json)")
     rp = sub.add_parser("report", help="Export a PDF report (aggregates only) to your private data dir")
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
@@ -239,6 +244,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         added = store.add(conn, txns)
         print(f"Parsed {len(txns)} transactions, added {added} new.")
+    elif args.cmd == "import-pdfs":
+        from fin_client import pdf_import
+        names = dict(m.split("=", 1) for m in args.map if "=" in m)
+        rep = pdf_import.import_pdfs(conn, pdf_import.expand(args.paths), names, args.dry_run)
+        print(f"{rep['pdfs']} PDFs: {rep['not_bank_statements']} are not bank statements in a supported layout, {rep['unreadable']} unreadable.")
+        for a in rep["accounts"]:
+            print(f"  {a['account']}: {a['reconciled']}/{a['statements']} statements reconcile, {a['first']} to {a['last']}, "
+                  f"{a['transactions']} transactions, {'would add' if args.dry_run else 'added'} {a['added']}")
+        for k in rep["skipped"]:
+            print(f"  skipped {k['account']} {k['period']}: {k['problem']}")
+        print(f"{'Would add' if args.dry_run else 'Added'} {rep['added']} transactions.")
     elif args.cmd == "transactions":
         from datetime import date as _d
 

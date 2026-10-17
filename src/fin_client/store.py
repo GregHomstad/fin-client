@@ -9,33 +9,47 @@ from fin_client.models import Transaction
 from fin_client.paths import data_dir
 
 
+SCHEMA = """CREATE TABLE IF NOT EXISTS transactions (
+    date TEXT NOT NULL, description TEXT NOT NULL, amount TEXT NOT NULL, account TEXT NOT NULL,
+    bank_category TEXT NOT NULL DEFAULT '', occurrence INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(date, description, amount, account, occurrence))"""
+
+
 def connect(db_path=None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path or data_dir() / "ledger.db")
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS transactions (
-            date TEXT NOT NULL, description TEXT NOT NULL,
-            amount TEXT NOT NULL, account TEXT NOT NULL,
-            UNIQUE(date, description, amount, account))"""
-    )
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}
-    if "bank_category" not in cols:  # migrate older databases
-        conn.execute("ALTER TABLE transactions ADD COLUMN bank_category TEXT NOT NULL DEFAULT ''")
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='transactions'").fetchone()
+    if not exists:
+        conn.execute(SCHEMA)
+        conn.execute("PRAGMA user_version = 2")
+    elif conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+        # v2: genuine identical same-day transactions (two $9.86 fuel purchases) must both survive an import
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}
+        bank = "bank_category" if "bank_category" in cols else "''"
+        conn.execute("ALTER TABLE transactions RENAME TO transactions_v1")
+        conn.execute(SCHEMA)
+        conn.execute(f"INSERT INTO transactions (date, description, amount, account, bank_category, occurrence) "
+                     f"SELECT date, description, amount, account, {bank}, 1 FROM transactions_v1")
+        conn.execute("DROP TABLE transactions_v1")
+        conn.execute("PRAGMA user_version = 2")
+    conn.commit()
     return conn
 
 
 def add(conn: sqlite3.Connection, txns: list[Transaction]) -> int:
+    """Insert transactions; re-importing the same file adds nothing, but identical rows within a file all count."""
     before = conn.total_changes
+    seen: dict[tuple, int] = {}
+    rows = []
+    for t in txns:
+        key = (t.date.isoformat(), t.description, str(t.amount), t.account)
+        seen[key] = seen.get(key, 0) + 1
+        rows.append(key + (t.bank_category, seen[key]))
     conn.executemany(
-        "INSERT OR IGNORE INTO transactions (date, description, amount, account, bank_category) VALUES (?,?,?,?,?)",
-        [(t.date.isoformat(), t.description, str(t.amount), t.account, t.bank_category) for t in txns],
-    )
+        "INSERT OR IGNORE INTO transactions (date, description, amount, account, bank_category, occurrence) VALUES (?,?,?,?,?,?)", rows)
     # re-importing fills in bank categories for rows stored before that column existed
     conn.executemany(
-        "UPDATE transactions SET bank_category=? WHERE date=? AND description=? AND amount=? AND account=? "
-        "AND bank_category=''",
-        [(t.bank_category, t.date.isoformat(), t.description, str(t.amount), t.account)
-         for t in txns if t.bank_category],
-    )
+        "UPDATE transactions SET bank_category=? WHERE date=? AND description=? AND amount=? AND account=? AND bank_category=''",
+        [(t.bank_category, t.date.isoformat(), t.description, str(t.amount), t.account) for t in txns if t.bank_category])
     conn.commit()
     return conn.total_changes - before
 
