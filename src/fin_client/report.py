@@ -236,8 +236,10 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
                                 [[f"{p['start']} to {p['end']}", p["months"], money(p["pay"]), money(p["support"]), money(p["monthly_spending"]),
                                   money(p["monthly_surplus"]), money(p["cash_at_end"])] for p in tl["phases"]],
                                 [1.5 * inch, 0.6 * inch, 0.8 * inch, 0.8 * inch, 0.9 * inch, 0.9 * inch, 1.0 * inch]))
-            if tl.get("months_cash_lasts_in_last_phase") is not None:
-                story.append(Paragraph(f"At the last period's pace your cash would last about {tl['months_cash_lasts_in_last_phase']} more months.", small))
+            if tl.get("cash_runs_out"):
+                story.append(Paragraph(f"At this pace your cash runs out around {tl['cash_runs_out']}.", body))
+            else:
+                story.append(Paragraph("Your cash stays above zero for the whole 12 months at this pace.", body))
             story.append(Paragraph(tl["note"], small))
         story.append(Spacer(1, 6))
         story.append(Paragraph("If income stops (for example, a contract that does not convert)", h2))

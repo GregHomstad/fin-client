@@ -80,3 +80,11 @@ def test_income_timeline_steps_down_with_family_support_and_contract_end():
     assert tl["months_cash_lasts_in_last_phase"] is not None and tl["months_cash_lasts_in_last_phase"] > 0
     assert recovery.income_timeline({}, 5000.0, 4000.0, date(2026, 10, 17)) is None
     assert recovery._label(24324) == "2026-12" and recovery._label(24325) == "2027-01" and recovery._label(24312) == "2025-12"
+
+
+def test_timeline_reports_the_month_cash_runs_out():
+    prof = {"net_per_paycheck": 2000.0, "family_support": {"monthly": 3500, "through": "2026-11", "after_monthly": 1000}, "contract_ends": "2027-02"}
+    tl = recovery.income_timeline(prof, cash=5000.0, spending=4000.0, today=date(2026, 10, 17))
+    assert tl["cash_runs_out"] == "2027-03"
+    rich = recovery.income_timeline(prof, cash=500000.0, spending=4000.0, today=date(2026, 10, 17))
+    assert rich["cash_runs_out"] is None

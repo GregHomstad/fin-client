@@ -42,7 +42,7 @@ def income_timeline(profile: dict, cash: float, spending: float | None, today: d
     step_i = _idx(fs["through"]) + 1 if fs.get("through") else None            # first month at the lower support
     end_i = _idx(profile["contract_ends"]) if profile.get("contract_ends") else None  # last month with pay
     horizon = 12
-    rows, bal, cur = [], cash, None
+    rows, bal, cur, out_of_cash = [], cash, None, None
     for i in range(now_i, now_i + horizon):
         support = support_after if (step_i is not None and i >= step_i) else support_now
         pay = take_home if (end_i is None or i <= end_i) else 0.0
@@ -54,6 +54,8 @@ def income_timeline(profile: dict, cash: float, spending: float | None, today: d
         cur["months"] += 1
         cur["end"] = _label(i)
         bal += pay + support - spending
+        if bal < 0 and out_of_cash is None:
+            out_of_cash = _label(i)
         cur["cash_at_end"] = round(bal, 2)
     for r in rows:
         r.pop("key")
@@ -66,7 +68,7 @@ def income_timeline(profile: dict, cash: float, spending: float | None, today: d
         runs_out = round(max(before, 0) / -last["monthly_surplus"], 1)
     note = ("Spending is what your imported accounts show since your chosen start month. Card spending that isn't imported yet "
             "is missing, so real surpluses are lower.")
-    return {"phases": rows, "months_cash_lasts_in_last_phase": runs_out, "starting_cash": round(cash, 2), "note": note}
+    return {"phases": rows, "cash_runs_out": out_of_cash, "months_cash_lasts_in_last_phase": runs_out, "starting_cash": round(cash, 2), "note": note}
 
 
 def build(surplus: float, essential: float, cat_avg: dict[str, float], accts: list[dict], goal_rows: list[dict],
