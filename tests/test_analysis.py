@@ -144,3 +144,16 @@ def test_a_biller_that_changes_its_description_stays_one_recurring_payment():
     assert got["stopped"] == []
     far = [T(d(2026, 1, 5), "OLD BILLER ATT", Decimal("-50"), "Chk")] + [T(d(2026, m, 5), "NEW BILLER ATT", Decimal("-50"), "Chk") for m in (8, 9, 10)]
     assert len(recurring._merge_aliases({("OLD BILLER ATT", False): far[:1], ("NEW BILLER ATT", False): far[1:]})) == 2  # 7 months apart: not merged
+
+
+def test_shared_distinctive_word_merges_but_generic_words_do_not():
+    from datetime import date as d
+
+    from fin_client.models import Transaction as T
+    a = [T(d(2026, m, 3), "TEL PAYMENTS DISCOVER", Decimal("-35"), "Chk") for m in (5, 6, 7)]
+    b = [T(d(2026, m, 3), "TEL CRCARDPMT DISCOVER CAP ONE", Decimal("-35"), "Chk") for m in (8, 9)]
+    got = recurring.analyze(a + b + [T(d(2026, 9, 28), "FILLER", Decimal("-1"), "Chk")])
+    assert len(got["active"]) == 1 and got["active"][0].count == 5 and got["stopped"] == []
+    x = [T(d(2026, m, 3), "ONLINE PAYMENT RENT CO", Decimal("-900"), "Chk") for m in (5, 6, 7)]
+    y = [T(d(2026, m, 3), "ONLINE PAYMENT UTILITY CO", Decimal("-905"), "Chk") for m in (8, 9)]
+    assert len(recurring._merge_aliases({("ONLINE PAYMENT RENT CO", False): x, ("ONLINE PAYMENT UTILITY CO", False): y})) == 2

@@ -346,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
                 for d in unk:
                     print(f"  {d}")
         elif args.cmd == "recurring":
-            rec = recurring.analyze(txns, snapshot._since(snapshot.load_profile()))
+            rec = snapshot.recurring_view(txns, snapshot.load_profile(), rules)
             for title, key in (("ACTIVE (a payment since your baseline month)", "active"), ("YEARLY (next renewal)", "yearly"),
                                ("STOPPED: follow up and confirm the account is closed", "stopped")):
                 print(f"\n{title}")

@@ -25,6 +25,16 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+HABIT_CATEGORIES = {"Dining", "Groceries", "Shopping", "Transportation", "Alcohol & Tobacco", "Cash & ATM", "Travel"}
+
+
+def recurring_view(txns, profile, rules):
+    """Recurring patterns for display; stopped habits (dining, shopping, fuel) are not flagged for account follow-up."""
+    from fin_client.categorize import categorize
+    return recurring.analyze(txns, _since(profile),
+                             lambda r: categorize(r.merchant, r.amount, rules) in HABIT_CATEGORIES)
+
+
 def _since(profile: dict | None):
     from datetime import date
     s = str((profile or {}).get("baseline_since") or "")[:7]
@@ -86,7 +96,7 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
 
     essential = sum((v for c, v in cat_totals.items() if c in ESSENTIALS), Decimal(0)) / n
     income = avg["avg_income"]
-    rec = recurring.analyze(txns, _since(profile))
+    rec = recurring_view(txns, profile, rules)
     fixed = rec["active"] + rec["yearly"]
     fixed_out = -sum((r.monthly_cost for r in fixed if r.amount < 0), Decimal(0))
 

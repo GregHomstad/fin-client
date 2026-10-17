@@ -53,9 +53,20 @@ def merchant_key(description: str) -> str:
     return normalize(description, max_tokens=4)
 
 
+GENERIC = {"PAYMENT", "PAYMENTS", "PYMNT", "PYMNTS", "TRANSFER", "ONLINE", "MOBILE", "WITHDRAWAL", "DEPOSIT", "PURCHASE", "SERVICE", "CHARGE",
+           "ACCOUNT", "BANK", "CARD", "DEBIT", "CREDIT", "WEB", "BILL", "AUTOPAY"}
+
+
 def _tail(key: str) -> str:
     last = key.split()[-1] if key else ""
     return last if len(last) >= 3 else ""
+
+
+def _same_biller(a: str, b: str) -> bool:
+    """Same last word, or a shared distinctive word (a name of at least 5 letters that is not a generic banking word)."""
+    if _tail(a) and _tail(a) == _tail(b):
+        return True
+    return bool({w for w in a.split() if len(w) >= 5 and w not in GENERIC} & {w for w in b.split() if len(w) >= 5 and w not in GENERIC})
 
 
 def _merge_aliases(groups: dict[tuple[str, bool], list[Transaction]]) -> dict[tuple[str, bool], list[Transaction]]:
@@ -70,7 +81,7 @@ def _merge_aliases(groups: dict[tuple[str, bool], list[Transaction]]) -> dict[tu
         keys = list(merged)
         for i, a in enumerate(keys):
             for b in keys[i + 1:]:
-                if a not in merged or b not in merged or a[1] != b[1] or not _tail(a[0]) or _tail(a[0]) != _tail(b[0]):
+                if a not in merged or b not in merged or a[1] != b[1] or not _same_biller(a[0], b[0]):
                     continue
                 ga, gb = sorted(merged[a], key=lambda t: t.date), sorted(merged[b], key=lambda t: t.date)
                 ma, mb = median([t.amount for t in ga]), median([t.amount for t in gb])
@@ -120,7 +131,7 @@ def detect(txns: list[Transaction], min_occurrences: int = 3, amount_tol: float 
     return sorted(found, key=lambda r: r.amount)
 
 
-def analyze(txns: list[Transaction], since: date | None = None) -> dict[str, list[Recurring]]:
+def analyze(txns: list[Transaction], since: date | None = None, not_a_commitment=None) -> dict[str, list[Recurring]]:
     """Group the patterns for display.
 
     active   - still charging, with a payment since `since` (your baseline month), excluding yearly ones
@@ -130,5 +141,6 @@ def analyze(txns: list[Transaction], since: date | None = None) -> dict[str, lis
     items = detect(txns)
     active = [r for r in items if r.status == "active" and r.cadence != "yearly" and (since is None or r.last_date >= since)]
     yearly = [r for r in items if r.cadence == "yearly" and r.status == "active"]
-    stopped = [r for r in items if r.status == "stopped"]
+    # a restaurant you visit monthly is a habit, not an account to close: only commitments get a follow-up
+    stopped = [r for r in items if r.status == "stopped" and not (not_a_commitment and not_a_commitment(r))]
     return {"active": active, "yearly": yearly, "stopped": sorted(stopped, key=lambda r: r.last_date, reverse=True)}

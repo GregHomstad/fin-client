@@ -99,7 +99,7 @@ async def overview(request: Request):
     conn, txns, rules, accts, profile = _ctx()
     months = analytics.cashflow(txns, rules)
     snap = snapshot.build(txns, rules, profile, conn)
-    rec = recurring.analyze(txns, snapshot._since(profile))
+    rec = snapshot.recurring_view(txns, profile, rules)
     unc = labeler.uncategorized_merchants(txns, rules)
     return ok({
         "accounts": accts, "net_worth": accounts.net_worth(accts),
