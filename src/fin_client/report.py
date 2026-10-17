@@ -122,11 +122,22 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
                         [[c, money(v), f"{v / total * 100:.0f}%"] for c, v in snap["average_spending_by_category"].items()],
                         [3.2 * inch, 1.4 * inch, 1.2 * inch]))
 
-    if snap["recurring_items"]:
-        story.append(Paragraph("Recurring charges and deposits", h2))
-        story.append(_table([["Merchant", "Cadence", "Amount"]] +
-                            [[r["merchant"].title(), r["cadence"], money(r["amount"], 2)] for r in snap["recurring_items"]],
-                            [3.2 * inch, 1.4 * inch, 1.2 * inch]))
+    per = snap["period"]
+    items = snap["recurring_items"]
+    if items:
+        since = f" since {per['averages_from']}" if per.get("baseline_chosen_by_you") else ""
+        story.append(Paragraph(f"Recurring charges and deposits still active{since}", h2))
+        story.append(_table([["Merchant", "Cadence", "Last paid", "Amount"]] +
+                            [[r["merchant"].title()[:40], r["cadence"], r["last_payment"], money(r["amount"], 2)] for r in items],
+                            [3.0 * inch, 1.0 * inch, 1.1 * inch, 1.0 * inch]))
+    stopped = snap.get("recurring_follow_ups") or []
+    if stopped:
+        story.append(Paragraph("Stopped: follow up and confirm the account is closed", h2))
+        story.append(Paragraph("These used to repeat and no longer do. A payment that just stops can mean a cancelled plan with the account "
+                               "still open, a failed payment, or a closed card.", small))
+        story.append(_table([["Merchant", "Cadence", "Last payment", "Amount"]] +
+                            [[r["merchant"].title()[:40], r["cadence"], r["last_payment"], money(r["amount"], 2)] for r in stopped],
+                            [3.0 * inch, 1.0 * inch, 1.1 * inch, 1.0 * inch]))
 
     plan = snap.get("planning", {})
     ef = plan.get("emergency_fund")

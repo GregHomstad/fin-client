@@ -316,13 +316,23 @@ function viewSpending() {
 }
 
 function viewRecurring() {
-  const root = h("div", {}), list = OV.recurring;
-  const out = list.filter((r) => r.amount < 0), inn = list.filter((r) => r.amount > 0);
-  const sum = (a) => a.reduce((t, r) => t + r.monthly_cost, 0);
-  root.append(head("Recurring", "Charges and deposits that repeat on a steady schedule."));
-  root.append(h("div", { class: "grid cols-3" }, stat("Fixed outflows", money(-sum(out)), "per month"), stat("Recurring income", money(sum(inn)), "per month"), stat("Items", String(list.length), "detected")));
-  const rows = (arr) => arr.map((r) => h("tr", {}, h("td", {}, cap(r.merchant.toLowerCase())), h("td", {}, h("span", { class: "pill" }, r.cadence)), h("td", { class: "num" }, r.last), h("td", { class: "num" }, "~" + r.next), h("td", { class: "r num " + (r.amount > 0 ? "good" : "") }, money(r.amount, 2)), h("td", { class: "r num" }, money(r.monthly_cost, 2))));
-  root.append(h("div", { style: { marginTop: "1rem" } }, card(null, list.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Merchant", "Cadence", "Last", "Next", "Amount", "Per month"].map((t, i) => h("th", { class: i > 3 ? "r" : "" }, t)))), h("tbody", {}, rows(list.slice().sort((a, b) => a.amount - b.amount))))) : emptyState("Nothing detected yet. It needs 3+ similar charges."))));
+  const root = h("div", {}), sec = OV.recurring_sections || { active: OV.recurring, yearly: [], stopped: [] };
+  const since = OV.snapshot?.period?.baseline_chosen_by_you ? ymLabel(OV.snapshot.period.averages_from) : null;
+  const sum = (a, neg) => a.filter((r) => (neg ? r.amount < 0 : r.amount > 0)).reduce((t, r) => t + r.monthly_cost, 0);
+  append(root, head("Recurring", since ? `Only what is still happening since ${since}. Stopped ones are flagged so you can confirm the account is really closed.` : "Charges and deposits that repeat on a steady schedule."));
+  append(root, h("div", { class: "grid cols-3" },
+    stat("Active charges", money(-sum(sec.active, true)), "per month, still charging"), stat("Active deposits", money(sum(sec.active, false)), "per month"),
+    stat("Follow up", String(sec.stopped.length), "stopped: confirm closed", sec.stopped.length ? "bad" : "good")));
+  const table = (cols, rows) => h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, cols.map((t, i) => h("th", { class: i >= cols.length - 2 ? "r" : "" }, t)))), h("tbody", {}, rows)));
+  const rowOf = (r, extra) => h("tr", {}, h("td", {}, cap(r.merchant.toLowerCase())), h("td", {}, h("span", { class: "pill" }, r.cadence)), h("td", { class: "num" }, r.last), h("td", { class: "num" }, extra),
+    h("td", { class: "r num " + (r.amount > 0 ? "good" : "") }, money(r.amount, 2)), h("td", { class: "r num" }, money(r.monthly_cost, 2)));
+  const a = [...sec.active].sort((x, y) => x.amount - y.amount);
+  append(root, h("div", { style: { marginTop: "1rem" } }, card("Active", a.length ? table(["Merchant", "Cadence", "Last paid", "Next", "Amount", "Per month"], a.map((r) => rowOf(r, "~" + r.next))) : emptyState("Nothing active detected yet. A pattern needs 3 similar payments."))));
+  if (sec.yearly.length) append(root, h("div", { style: { marginTop: "1rem" } }, card("Yearly", table(["Merchant", "Cadence", "Last paid", "Renews", "Amount", "Per month"], sec.yearly.map((r) => rowOf(r, "~" + r.next))),
+    h("p", { class: "fine" }, "Found by two payments about a year apart. Yearly charges need at least a year of history to show up."))));
+  const stopped = h("div", {}, sec.stopped.length ? sec.stopped.map((r) => h("div", { class: "note", style: { margin: ".5rem 0" } },
+    h("b", {}, cap(r.merchant.toLowerCase())), ` · ${r.cadence} · ${money(r.amount, 2)} · last ${r.last}`, h("br"), h("span", { class: "fine" }, r.follow_up))) : emptyState("No stopped patterns."));
+  append(root, h("div", { style: { marginTop: "1rem" } }, card("Stopped: follow up", h("p", { class: "fine", style: { marginTop: 0 } }, "These used to repeat and no longer do. A payment that just stops is not proof the account is gone."), stopped)));
   return root;
 }
 

@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from decimal import Decimal
 
 from fin_client import analytics, cli, recurring
@@ -31,7 +32,7 @@ def test_recurring_detection():
     assert found["EXAMPLE APARTMENTS RENT"].monthly_cost == Decimal("-1100.00")
     assert found["FAKE STREAMING"].count == 5
     assert found["ACME CORP PAYROLL"].amount == Decimal("2500.00")
-    assert "DEMO ELECTRIC CO" in found  # varies ~10%, within tolerance
+    assert "DEMO ELECTRIC" in found  # varies ~10%, within tolerance
     assert "SAMPLE GROCERY MART" not in found  # amounts too variable
     assert "DEMO PHARMACY" not in found  # one-off
 
@@ -95,3 +96,36 @@ def test_store_migrates_and_backfills_bank_category(tmp_path):
     got = {t.description: t.bank_category for t in store.all_transactions(conn)}
     assert got["SAMPLE GROCERY MART"] == "Food"  # backfilled, not duplicated
     assert len(got) == 3
+
+
+def test_recurring_active_yearly_and_stopped_with_follow_up():
+    from datetime import date as d
+
+    from fin_client.models import Transaction as T
+    t = []
+    for m in range(1, 11):  # a monthly charge that is still going
+        t.append(T(d(2026, m, 5), "STREAMING PLUS 123", Decimal("-15.99"), "Chk"))
+    for m in (3, 4, 5, 6):  # a monthly charge that ended in June
+        t.append(T(d(2026, m, 9), "OLD GYM CLUB", Decimal("-30"), "Chk"))
+    t += [T(d(2025, 10, 20), "ANNUAL ANTIVIRUS", Decimal("-59.99"), "Chk"), T(d(2026, 10, 19), "ANNUAL ANTIVIRUS", Decimal("-59.99"), "Chk")]
+    for i in range(3):  # an old deposit pattern that stopped
+        t.append(T(d(2025, 11, 6) + timedelta(days=14 * i), "ADVANCE APP DEPOSIT", Decimal("500"), "Chk"))
+    t.append(T(d(2026, 10, 25), "OTHER ACCOUNT ITEM", Decimal("-1"), "Chk"))  # pushes the newest date forward
+    got = recurring.analyze(t, since=d(2026, 8, 1))
+    assert [r.merchant for r in got["active"]] == ["STREAMING PLUS"]
+    assert [r.merchant for r in got["yearly"]] == ["ANNUAL ANTIVIRUS"] and got["yearly"][0].cadence == "yearly"
+    stopped = {r.merchant: r for r in got["stopped"]}
+    assert set(stopped) == {"OLD GYM CLUB", "ADVANCE APP DEPOSIT"}
+    assert "account itself is closed" in stopped["OLD GYM CLUB"].follow_up and "deposit" in stopped["ADVANCE APP DEPOSIT"].follow_up
+    assert got["active"][0].follow_up == ""
+
+
+def test_stopped_is_judged_against_that_accounts_newest_data():
+    from datetime import date as d
+
+    from fin_client.models import Transaction as T
+    t = [T(d(2026, m, 25), "SUB SERVICE", Decimal("-10"), "Short export") for m in (6, 7, 8)]
+    t += [T(d(2026, 9, 1), "OTHER", Decimal("-1"), "Short export")]            # this export stops Sep 1
+    t += [T(d(2026, 10, 15), "ELSEWHERE", Decimal("-1"), "Long export")]       # another account is newer
+    [r] = [x for x in recurring.analyze(t)["active"] if x.merchant == "SUB SERVICE"]
+    assert r.status == "active"  # last payment Aug 25 is only 7 days before ITS account's data ends, not 51

@@ -1,11 +1,17 @@
-"""Detect recurring charges/deposits from transaction history."""
-import re
+"""Detect recurring charges and deposits, say which are still active, and flag the ones that stopped.
+
+A charge is "active" if its latest payment is recent enough for its cadence, measured against the newest data
+for the SAME account (so an account whose export stops on the 20th is not blamed for a charge due on the 25th).
+A charge that stopped is flagged for follow-up: a payment that just ends can mean a cancelled plan with the
+account still open, a failed payment, or a closed card.
+"""
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from statistics import median
 
+from fin_client.merchants import normalize
 from fin_client.models import Transaction
 
 CADENCES = {  # name: (days, tolerance, occurrences per month)
@@ -25,38 +31,69 @@ class Recurring:
     count: int
     last_date: date
     next_expected: date
+    first_date: date | None = None
+    account: str = ""
+    status: str = "active"  # active | stopped
+    days_since_last: int = 0
 
     @property
     def monthly_cost(self) -> Decimal:
         return (self.amount * CADENCES[self.cadence][2]).quantize(Decimal("0.01"))
 
+    @property
+    def follow_up(self) -> str:
+        if self.status != "stopped":
+            return ""
+        what = "deposit" if self.amount > 0 else "charge"
+        return (f"Last {what} {self.last_date.isoformat()}. Confirm the plan is cancelled AND the account itself is closed or deleted "
+                "(a payment that just stops can be a cancelled plan with the account still open, a failed payment, or a closed card).")
+
 
 def merchant_key(description: str) -> str:
-    s = re.sub(r"[#*]?\d+", " ", description.upper())
-    s = re.sub(r"[^A-Z& ]", " ", s)
-    return " ".join(s.split())
+    return normalize(description, max_tokens=4)
 
 
 def detect(txns: list[Transaction], min_occurrences: int = 3, amount_tol: float = 0.15) -> list[Recurring]:
+    """Every recurring pattern in the history. Yearly ones need only two payments about a year apart."""
     groups: dict[tuple[str, bool], list[Transaction]] = defaultdict(list)
+    newest: dict[str, date] = {}
     for t in txns:
+        newest[t.account] = max(newest.get(t.account, t.date), t.date)
         key = merchant_key(t.description)
         if key:
             groups[(key, t.amount > 0)].append(t)
+    overall = max(newest.values(), default=date.today())
     found = []
     for (key, _), items in groups.items():
-        if len(items) < min_occurrences:
+        if len(items) < 2:
             continue
         items.sort(key=lambda t: t.date)
         amts = [t.amount for t in items]
         med = median(amts)
         if med == 0 or any(abs(a - med) > abs(med) * Decimal(str(amount_tol)) for a in amts):
             continue
-        gaps = [(b.date - a.date).days for a, b in zip(items, items[1:])]
-        gap = median(gaps)
+        gap = median([(b.date - a.date).days for a, b in zip(items, items[1:])])
         for name, (days, tol, _) in CADENCES.items():
-            if abs(gap - days) <= tol:
-                last = items[-1].date
-                found.append(Recurring(key, name, med, len(items), last, last + timedelta(days=days)))
+            if abs(gap - days) <= tol and (len(items) >= min_occurrences or name == "yearly"):
+                last = items[-1]
+                ref = newest.get(last.account, overall)
+                age = (ref - last.date).days
+                active = age <= days * 1.3 + tol
+                found.append(Recurring(key, name, med, len(items), last.date, last.date + timedelta(days=days), items[0].date,
+                                       last.account, "active" if active else "stopped", age))
                 break
     return sorted(found, key=lambda r: r.amount)
+
+
+def analyze(txns: list[Transaction], since: date | None = None) -> dict[str, list[Recurring]]:
+    """Group the patterns for display.
+
+    active   - still charging, with a payment since `since` (your baseline month), excluding yearly ones
+    yearly   - once-a-year charges and when the next renewal is due, whenever the last one was
+    stopped  - patterns that ended: follow up to make sure the plan is cancelled and the account closed
+    """
+    items = detect(txns)
+    active = [r for r in items if r.status == "active" and r.cadence != "yearly" and (since is None or r.last_date >= since)]
+    yearly = [r for r in items if r.cadence == "yearly" and r.status == "active"]
+    stopped = [r for r in items if r.status == "stopped"]
+    return {"active": active, "yearly": yearly, "stopped": sorted(stopped, key=lambda r: r.last_date, reverse=True)}

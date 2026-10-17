@@ -88,18 +88,26 @@ def _month(m: analytics.Month) -> dict:
             "by_category": {k: float(v) for k, v in sorted(m.by_category.items(), key=lambda kv: -kv[1])}}
 
 
+def _rec_json(items) -> list[dict]:
+    return [{"merchant": r.merchant, "cadence": r.cadence, "amount": float(r.amount), "count": r.count,
+             "first": r.first_date.isoformat() if r.first_date else None, "last": r.last_date.isoformat(),
+             "next": r.next_expected.isoformat(), "monthly_cost": float(r.monthly_cost), "status": r.status,
+             "account": r.account, "follow_up": r.follow_up} for r in items]
+
+
 async def overview(request: Request):
     conn, txns, rules, accts, profile = _ctx()
     months = analytics.cashflow(txns, rules)
     snap = snapshot.build(txns, rules, profile, conn)
+    rec = recurring.analyze(txns, snapshot._since(profile))
     unc = labeler.uncategorized_merchants(txns, rules)
     return ok({
         "accounts": accts, "net_worth": accounts.net_worth(accts),
         "months": [_month(m) for m in months],
         "snapshot": None if "error" in snap else snap,
-        "recurring": [{"merchant": r.merchant, "cadence": r.cadence, "amount": float(r.amount),
-                       "count": r.count, "last": r.last_date.isoformat(), "next": r.next_expected.isoformat(),
-                       "monthly_cost": float(r.monthly_cost)} for r in recurring.detect(txns)],
+        "recurring": _rec_json(rec["active"] + rec["yearly"]),
+        "recurring_sections": {"active": _rec_json(rec["active"]), "yearly": _rec_json(rec["yearly"]),
+                               "stopped": _rec_json(rec["stopped"])},
         "uncategorized": {"merchants": len(unc), "spending": float(sum(u[2] for u in unc))},
         "types": [{"value": t, "label": accounts.LABELS[t], "kind": "liability" if t in accounts.LIABILITY_TYPES else "asset"}
                   for t in accounts.ALL_TYPES],

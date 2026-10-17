@@ -25,6 +25,12 @@ def load_profile() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _since(profile: dict | None):
+    from datetime import date
+    s = str((profile or {}).get("baseline_since") or "")[:7]
+    return date(int(s[:4]), int(s[5:7]), 1) if len(s) == 7 else None
+
+
 def _data_quality(conn, txns, profile: dict) -> list[str]:
     if conn is None:
         return []
@@ -80,7 +86,8 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
 
     essential = sum((v for c, v in cat_totals.items() if c in ESSENTIALS), Decimal(0)) / n
     income = avg["avg_income"]
-    fixed = recurring.detect(txns)
+    rec = recurring.analyze(txns, _since(profile))
+    fixed = rec["active"] + rec["yearly"]
     fixed_out = -sum((r.monthly_cost for r in fixed if r.amount < 0), Decimal(0))
 
     plan = planning.build(profile or {}, _f(avg["avg_net"]), _f(essential))
@@ -105,7 +112,11 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
         "recurring_outflows_per_month": _f(fixed_out),
         "recurring_outflows_pct_of_income": _f(fixed_out / income * 100) if income > 0 else None,
         "recurring_items": [
-            {"merchant": r.merchant, "cadence": r.cadence, "amount": _f(r.amount)} for r in fixed
+            {"merchant": r.merchant, "cadence": r.cadence, "amount": _f(r.amount), "last_payment": r.last_date.isoformat()} for r in fixed
+        ],
+        "recurring_follow_ups": [
+            {"merchant": r.merchant, "cadence": r.cadence, "amount": _f(r.amount), "last_payment": r.last_date.isoformat(),
+             "note": r.follow_up} for r in rec["stopped"]
         ],
         "monthly_history": [
             {"month": m.month, "income": _f(m.income), "spending": _f(m.spending),

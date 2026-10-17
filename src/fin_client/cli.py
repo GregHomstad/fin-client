@@ -346,12 +346,14 @@ def main(argv: list[str] | None = None) -> int:
                 for d in unk:
                     print(f"  {d}")
         elif args.cmd == "recurring":
-            items = recurring.detect(txns)
-            for r in items:
-                print(f"{r.merchant:<28}{r.cadence:<10}{r.amount:>10}  x{r.count}  "
-                      f"next ~{r.next_expected}  ({r.monthly_cost}/mo)")
-            if not items:
-                print("No recurring items found (need 3+ similar occurrences).")
+            rec = recurring.analyze(txns, snapshot._since(snapshot.load_profile()))
+            for title, key in (("ACTIVE (a payment since your baseline month)", "active"), ("YEARLY (next renewal)", "yearly"),
+                               ("STOPPED: follow up and confirm the account is closed", "stopped")):
+                print(f"\n{title}")
+                for r in rec[key]:
+                    print(f"  {r.merchant:<34}{r.cadence:<10}{r.amount:>10}  last {r.last_date}  ({r.monthly_cost}/mo)")
+                if not rec[key]:
+                    print("  none")
         else:
             months = analytics.cashflow(txns, rules)
             for m in months:
