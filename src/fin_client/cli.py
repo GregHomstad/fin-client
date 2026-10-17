@@ -11,6 +11,51 @@ from fin_client.importers import import_file
 from fin_client.paths import data_dir
 
 
+def claude_chat(snap: dict, include_merchants: bool, ask=input, say=print) -> int:
+    """Chat with Claude. Every send is previewed in full and needs a typed 'y'."""
+    from fin_client import advisor as adv
+    if not adv.claude_ready():
+        print("error: no Anthropic credential found. Set ANTHROPIC_API_KEY (or run `ant auth login`).", file=sys.stderr)
+        return 1
+    say("Claude (cloud) mode. Nothing is sent until you approve it. Educational only, not licensed advice.")
+    history: list[dict] = []
+    shown_full = False
+    while True:
+        try:
+            q = ask("\nyou> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            say("")
+            return 0
+        if q.lower() in ("exit", "quit"):
+            return 0
+        if not q:
+            continue
+        payload = adv.build_claude_payload(snap, history, q, include_merchants)
+        digest = adv.payload_digest(payload)
+        if not shown_full:
+            say("\n--- EXACTLY WHAT WILL BE SENT TO ANTHROPIC ---")
+            say(adv.render_payload(payload))
+            say("--- END ---")
+            shown_full = True
+        else:
+            say(f"\nWill send the same numbers (fingerprint {digest}), the conversation so far, and your new message.")
+            if ask("Type v to view everything, or press Enter to continue: ").strip().lower() == "v":
+                say(adv.render_payload(payload))
+        if ask(f"Send to Claude ({payload['model']})? [y/N] ").strip().lower() not in ("y", "yes"):
+            say("Not sent.")
+            continue
+        parts: list[str] = []
+        try:
+            for piece in adv.claude_stream(payload):
+                parts.append(piece)
+                print(piece, end="", flush=True)
+            print()
+        except Exception as e:  # noqa: BLE001
+            say(f"\nerror: Claude request failed ({type(e).__name__}).")
+            continue
+        history += [{"role": "user", "content": q}, {"role": "assistant", "content": "".join(parts)}]
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="fin-client", description=__doc__)
     p.add_argument("--data", type=Path, help="Use this private data directory instead of the default")
@@ -34,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--out", type=Path, help="Output path (must be outside the repo)")
     adv = sub.add_parser("advise", help="Chat with the local Ollama advisor about your finances")
     adv.add_argument("--model", default=os.environ.get("FIN_CLIENT_MODEL", DEFAULT_MODEL))
+    adv.add_argument("--claude", action="store_true",
+                     help="Use Claude (cloud) instead of Ollama. You review and approve every send.")
+    adv.add_argument("--include-merchants", action="store_true",
+                     help="With --claude: also send recurring merchant names (hidden by default)")
     adv.add_argument("--show-context", action="store_true",
                      help="Print exactly what the model would be given, then exit (no model call)")
     args = p.parse_args(argv)
@@ -94,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         if "error" in snap:
             print(snap["error"], file=sys.stderr)
             return 1
+        if args.claude:
+            return claude_chat(snap, args.include_merchants)
         try:
             ollama_url()
         except RuntimeError as e:

@@ -31,6 +31,7 @@ fin-client label                     # categorize merchants interactively
 fin-client report                    # PDF to <data dir>\reports (aggregates only; refuses paths inside the repo)
 fin-client advise --show-context     # exactly what the model would see; no model call
 fin-client advise [--model llama3:8b]
+fin-client advise --claude          # opt-in cloud advisor: shows the full request, asks y/N every turn
 ```
 The advisor sees only computed aggregates (category averages, savings rate, recurring commitments), never raw transactions. Add facts it can't infer (age, debts with APRs, balances, goals) to `profile.json` in your data directory (`fin-client where`). 
 
@@ -45,6 +46,9 @@ Example `profile.json` (all fields optional; missing ones are reported, not gues
 Tax estimates (2026 tables, IRS Rev. Proc. 2025-32 and Notice 2025-67) cover federal ordinary income tax, standard/itemized deduction, 401(k) catch-ups, traditional IRA deduction and Roth IRA phase-outs. They include employee FICA and Arkansas income tax (2026: 3.7% top rate, DFA formula; set `"state": "none"` to skip). They exclude other states, credits, capital gains, AMT and HSAs. The snapshot compares estimated take-home to your actual bank deposits. Gross income must come from you, since bank deposits are after-tax. Add a new year by extending `tax.DATA`.
 
 Planning results are computed in code and given to the model as facts, in today's dollars. It refuses any non-loopback `OLLAMA_HOST`.
+
+## Claude as advisor (opt-in)
+Default is the local Ollama model. For stronger reasoning, `pip install -e ".[claude]"`, set `ANTHROPIC_API_KEY` in the shell that starts the app, and choose Claude on the Advisor page or run `fin-client advise --claude`. Every send shows the exact request first (model `claude-opus-5-5` by default; override with `FIN_CLIENT_CLAUDE_MODEL`). Only aggregates are sent, with account and merchant names hidden. Educational guidance, not licensed advice.
 
 ## Dashboard
 `fin-client dashboard` serves a local web UI (Overview, Accounts, Transactions, Spending, Recurring, Plan, Advisor) on 127.0.0.1 only. It consolidates checking, savings, credit cards, loans and investments: import each export, type in balances for net worth, and card payments from checking are matched to the card's payment so spending is not double counted. No third-party requests (system fonts, hand-drawn charts, strict CSP), Host/Origin checks, and nothing is cached.

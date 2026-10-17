@@ -21,6 +21,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from fin_client import accounts, analytics, labeler, recurring, report, snapshot, store
+from fin_client import advisor as adv
 from fin_client.advisor import DEFAULT_MODEL, Advisor, ollama_url
 from fin_client.categorize import categorize, load_rules
 from fin_client.importers import import_file
@@ -218,15 +219,60 @@ async def ollama_models(request: Request):
         return ok({"running": False, "models": []})
 
 
+def _advise_snapshot():
+    _, txns, rules, _, profile = _ctx()
+    return snapshot.build(txns, rules, profile)
+
+
+def _claude_payload(d: dict, snap: dict) -> dict:
+    return adv.build_claude_payload(snap, d.get("history", []), str(d.get("question", "")).strip(),
+                                    bool(d.get("include_merchants")), d.get("model") or None)
+
+
+async def claude_status(request: Request):
+    import importlib.util
+    return ok({"ready": adv.claude_ready(), "sdk": importlib.util.find_spec("anthropic") is not None,
+               "model": adv.CLAUDE_MODEL})
+
+
+async def advise_preview(request: Request):
+    """Exactly what would be sent to Anthropic for this question. Nothing is sent by this call."""
+    d = await body(request)
+    if not str(d.get("question", "")).strip():
+        return err("question is required")
+    snap = _advise_snapshot()
+    if "error" in snap:
+        return err(snap["error"])
+    payload = _claude_payload(d, snap)
+    return ok({"payload": payload, "text": adv.render_payload(payload), "digest": adv.payload_digest(payload),
+               "approx_input_tokens": len(json.dumps(payload)) // 4, "ready": adv.claude_ready()})
+
+
 async def advise(request: Request):
     d = await body(request)
     question = str(d.get("question", "")).strip()
     if not question:
         return err("question is required")
-    _, txns, rules, _, profile = _ctx()
-    snap = snapshot.build(txns, rules, profile)
+    snap = _advise_snapshot()
     if "error" in snap:
         return err(snap["error"])
+
+    if d.get("engine") == "claude":  # cloud: only the exact payload the user previewed and approved
+        payload = _claude_payload(d, snap)
+        if d.get("digest") != adv.payload_digest(payload):
+            return err("What would be sent has changed since you previewed it. Preview it again.", 409)
+        if not adv.claude_ready():
+            return err("No Anthropic credential found. Set ANTHROPIC_API_KEY in the environment that runs the "
+                       "dashboard (or run `ant auth login`), then restart it.", 400)
+
+        def claude_stream():
+            try:
+                yield from adv.claude_stream(payload)
+            except Exception as e:  # noqa: BLE001
+                yield f"\n[Claude request failed: {type(e).__name__}. Nothing else was sent.]"
+
+        return StreamingResponse(claude_stream(), media_type="text/plain; charset=utf-8")
+
     try:
         ollama_url()
     except RuntimeError as e:
@@ -252,7 +298,8 @@ def create_app() -> Starlette:
         Route("/api/profile", profile_get), Route("/api/profile", profile_put, methods=["PUT"]),
         Route("/api/import", import_upload, methods=["POST"]),
         Route("/api/report.pdf", report_pdf), Route("/api/ollama", ollama_models),
-        Route("/api/advise", advise, methods=["POST"]),
+        Route("/api/advise", advise, methods=["POST"]), Route("/api/advise/preview", advise_preview, methods=["POST"]),
+        Route("/api/claude", claude_status),
         Mount("/", StaticFiles(directory=STATIC, html=True), name="static"),
     ]
     app = Starlette(routes=routes)

@@ -381,33 +381,93 @@ async function viewPlan() {
 }
 
 async function viewAdvisor() {
-  const root = h("div", {}), st = await api("/api/ollama"), history = [];
-  root.append(head("Advisor", "A local Ollama model that sees only your totals and plan results, never individual transactions."));
+  const root = h("div", {}), [st, cl] = await Promise.all([api("/api/ollama"), api("/api/claude")]), history = [];
+  root.append(head("Advisor", "Your totals and plan results go to the advisor, never your individual transactions."));
   if (!OV.has_data) return root.append(emptyState("Import transactions first.")), root;
+
+  let engine = "local"; // always starts local: Claude is opt-in each visit
   const models = st.models.length ? st.models : ["llama3:8b"];
-  const model = h("select", { "aria-label": "Model" }, models.map((m) => h("option", { value: m, selected: m === "llama3:8b" }, m)));
+  const model = h("select", { "aria-label": "Local model" }, models.map((m) => h("option", { value: m, selected: m === "llama3:8b" }, m)));
   const msgs = h("div", { class: "msgs", "aria-live": "polite" });
   const input = h("input", { type: "text", placeholder: "Ask about budgeting, debt, investing, taxes…", "aria-label": "Your question" });
   const send = h("button", { class: "btn accent", type: "submit" }, "Ask");
-  async function ask(q) {
-    if (!q.trim()) return;
+  const banner = h("div", { class: "note" });
+  const modelBox = h("label", { class: "f", style: { flex: "0 1 260px" } }, "Local model", model);
+
+  const engineBtns = ["local", "claude"].map((e) => h("button", { type: "button", class: "chip", "aria-pressed": e === engine ? "true" : "false", onclick: () => setEngine(e) }, e === "local" ? "Local (Ollama): stays on this PC" : "Claude: cloud, you approve each send"));
+  function setEngine(e) {
+    engine = e;
+    engineBtns.forEach((b, i) => b.setAttribute("aria-pressed", ["local", "claude"][i] === e ? "true" : "false"));
+    modelBox.hidden = e !== "local";
+    banner.replaceChildren(e === "local"
+      ? "Local mode: nothing leaves this computer."
+      : h("span", {}, "Claude mode: before every message you will see exactly what is sent to Anthropic (your totals, plan results and the conversation, with account and merchant names hidden) and must approve it. ",
+        !cl.ready ? h("b", { class: "bad" }, "No credential found: set ANTHROPIC_API_KEY and restart the dashboard. ") : null,
+        !cl.sdk ? h("b", { class: "bad" }, 'Install the SDK: pip install "fin-client[claude]". ') : null));
+    send.textContent = e === "local" ? "Ask" : "Review & send…";
+  }
+
+  function stream(res, bot, q, label) {
+    return (async () => {
+      const reader = res.body.getReader(), dec = new TextDecoder(); let text = "";
+      for (;;) { const { done, value } = await reader.read(); if (done) break; text += dec.decode(value, { stream: true }); bot.textContent = text; msgs.scrollTop = msgs.scrollHeight; }
+      history.push({ role: "user", content: q }, { role: "assistant", content: text });
+    })();
+  }
+
+  async function askLocal(q) {
     msgs.append(h("div", { class: "msg user" }, q)); const bot = h("div", { class: "msg bot" }, "…"); msgs.append(bot);
     input.value = ""; send.disabled = true; msgs.scrollTop = msgs.scrollHeight;
     try {
       const res = await api("/api/advise", { method: "POST", json: { question: q, model: model.value, history }, raw: true });
       if (!res.ok) throw new Error((await res.json()).error || "Request failed");
-      const reader = res.body.getReader(), dec = new TextDecoder(); let text = "";
-      for (;;) { const { done, value } = await reader.read(); if (done) break; text += dec.decode(value, { stream: true }); bot.textContent = text; msgs.scrollTop = msgs.scrollHeight; }
-      history.push({ role: "user", content: q }, { role: "assistant", content: text });
+      await stream(res, bot, q);
     } catch (e) { bot.textContent = e.message; bot.classList.add("bad"); }
     send.disabled = false; input.focus();
   }
+
+  async function askClaude(q) {
+    let include = false, prev;
+    const load = async () => (prev = await api("/api/advise/preview", { method: "POST", json: { question: q, history, include_merchants: include } }));
+    try { await load(); } catch (e) { return toast(e.message, true); }
+    const view = h("textarea", { readonly: true, rows: 16, "aria-label": "Exact text that will be sent", style: { fontFamily: "ui-monospace, Consolas, monospace", fontSize: ".78rem", resize: "vertical" } });
+    const meta = h("p", { class: "fine" });
+    const fill = () => { view.value = prev.text; meta.textContent = `Model ${prev.payload.model} · about ${prev.approx_input_tokens.toLocaleString()} input tokens · fingerprint ${prev.digest}`; };
+    fill();
+    const merch = h("input", { type: "checkbox", id: "inc-m", onchange: async () => { include = merch.checked; try { await load(); fill(); } catch (e) { toast(e.message, true); } } });
+    const okBtn = h("button", { class: "btn accent", type: "button" }, "Send exactly this to Claude");
+    const dlg = h("dialog", { style: { border: "1px solid var(--rule-2)", borderRadius: "10px", background: "var(--card)", color: "var(--ink)", padding: "1.2rem", width: "min(760px, 94vw)" } },
+      h("h3", {}, "Review what leaves this computer"),
+      h("p", { class: "muted" }, "This is the complete request. Account and debt names are replaced with generic labels; individual transactions are never included."),
+      view, meta,
+      h("label", { class: "f", style: { display: "flex", gap: ".5rem", alignItems: "center", margin: ".4rem 0" } }, merch, "Also include recurring merchant names (e.g. rent, subscriptions)"),
+      h("div", { class: "form-row", style: { justifyContent: "flex-end", marginTop: ".6rem" } }, h("button", { class: "btn ghost", type: "button", onclick: () => dlg.close() }, "Cancel"), okBtn));
+    dlg.addEventListener("close", () => dlg.remove());
+    okBtn.onclick = async () => {
+      dlg.close();
+      msgs.append(h("div", { class: "msg user" }, q)); const bot = h("div", { class: "msg bot" }, "…"); msgs.append(bot);
+      input.value = ""; send.disabled = true;
+      try {
+        const res = await api("/api/advise", { method: "POST", json: { question: q, history, include_merchants: include, engine: "claude", digest: prev.digest }, raw: true });
+        if (!res.ok) throw new Error((await res.json()).error || "Request failed");
+        bot.prepend(h("div", { class: "eyebrow", style: { marginBottom: ".3rem" } }, "Claude · cloud"));
+        const body = h("div", {}); bot.append(body);
+        await stream(res, body, q);
+      } catch (e) { bot.textContent = e.message; bot.classList.add("bad"); }
+      send.disabled = false; input.focus();
+    };
+    document.body.append(dlg); dlg.showModal();
+  }
+
+  const ask = (q) => (q.trim() ? (engine === "claude" ? askClaude(q.trim()) : askLocal(q)) : null);
   const form = h("form", { class: "form-row", onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send);
   const chips = ["What should I do with my monthly surplus?", "Should I pay off debt or invest first?", "How much should my emergency fund be?", "Am I on track for retirement?", "Where am I overspending?"];
   root.append(card(null,
-    !st.running ? h("div", { class: "note", style: { marginBottom: ".8rem" } }, "Ollama isn't running. Start it with ", h("code", {}, "ollama serve"), " and reload.") : null,
-    h("div", { class: "form-row", style: { marginBottom: ".8rem" } }, h("label", { class: "f", style: { flex: "0 1 260px" } }, "Model", model), h("div", { class: "chips", style: { flex: "3 1 300px", alignSelf: "end" } }, chips.map((c) => h("button", { class: "chip", type: "button", onclick: () => ask(c) }, c)))),
-    h("div", { class: "chat" }, msgs, form), h("p", { class: "fine" }, "Educational, not a licensed advisor. Replies come from a small local model: check the numbers against the Plan page.")));
+    !st.running ? h("div", { class: "note", style: { marginBottom: ".8rem" } }, "Local Ollama isn't running. Start it with ", h("code", {}, "ollama serve"), " and reload.") : null,
+    h("div", { class: "chips", style: { marginBottom: ".6rem" } }, engineBtns), banner,
+    h("div", { class: "form-row", style: { margin: ".8rem 0" } }, modelBox, h("div", { class: "chips", style: { flex: "3 1 300px", alignSelf: "end" } }, chips.map((c) => h("button", { class: "chip", type: "button", onclick: () => ask(c) }, c)))),
+    h("div", { class: "chat" }, msgs, form), h("p", { class: "fine" }, "Educational guidance, not a licensed financial advisor. Check the numbers against the Plan page.")));
+  setEngine("local");
   return root;
 }
 
