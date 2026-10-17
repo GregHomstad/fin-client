@@ -32,11 +32,12 @@ def _data_quality(conn, txns, profile: dict) -> list[str]:
     return coverage.analyze(txns, accounts.list_accounts(conn), profile)["warnings"]
 
 
-def _recovery(conn, essential: float, surplus: float, cat_avg: dict, profile: dict) -> dict | None:
+def _recovery(conn, essential: float, surplus: float, cat_avg: dict, profile: dict, spending: float | None = None) -> dict | None:
     if conn is None:
         return None
     from fin_client import accounts, goals, recovery
-    return recovery.build(surplus, essential, cat_avg, accounts.list_accounts(conn), goals.list_goals(conn), profile)
+    return recovery.build(surplus, essential, cat_avg, accounts.list_accounts(conn), goals.list_goals(conn), profile,
+                          spending=spending)
 
 
 def _goals_plan(conn, essential: float, surplus: float) -> dict | None:
@@ -59,9 +60,17 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
     months = analytics.cashflow(txns, rules)
     if not months:
         return {"error": "No transactions imported yet."}
-    full = months[1:-1] if len(months) >= 3 else months
+    since = str((profile or {}).get("baseline_since") or "")[:7]
+    if since:  # you chose the period that reflects your life now; drop the final month if the data stops mid-month
+        latest = max(t.date for t in txns)
+        full = [m for m in months if m.month >= since and not (m.month == latest.isoformat()[:7] and latest.day < 25)]
+        if not full:
+            full = months[-1:]
+        avg = analytics.averages(full, trim=False)
+    else:
+        full = months[1:-1] if len(months) >= 3 else months
+        avg = analytics.averages(months)
     n = Decimal(len(full))
-    avg = analytics.averages(months)
 
     cat_totals: dict[str, Decimal] = {}
     for m in full:
@@ -85,7 +94,8 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
                          "(e.g. health premiums, other withholding) or wrong gross income in profile.json."}
     return {
         "period": {"first_month": months[0].month, "last_month": months[-1].month,
-                   "months_in_averages": int(n)},
+                   "months_in_averages": int(n), "averages_from": full[0].month, "averages_to": full[-1].month,
+                   "baseline_chosen_by_you": bool(since)},
         "monthly_averages": {
             "income": _f(income), "spending": _f(avg["avg_spending"]), "net": _f(avg["avg_net"]),
             "savings_rate_pct": _f(avg["avg_net"] / income * 100) if income > 0 else None,
@@ -106,7 +116,7 @@ def build(txns: list[Transaction], rules: Rules | None = None, profile: dict | N
         "months_with_data": len(months),
         "planning": plan,
         "goals_plan": _goals_plan(conn, _f(essential), _f(avg["avg_net"])),
-        "recovery": _recovery(conn, _f(essential), _f(avg["avg_net"]), cat_avg, profile or {}),
+        "recovery": _recovery(conn, _f(essential), _f(avg["avg_net"]), cat_avg, profile or {}, _f(avg["avg_spending"])),
         "paycheck_reconciliation": recon,
         "user_profile": profile or {},
         "notes": ["Internal transfers are excluded from income and spending.",

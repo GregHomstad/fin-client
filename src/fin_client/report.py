@@ -108,9 +108,13 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
 
     hist = snap.get("history_window") or snap["monthly_history"]
     have = snap.get("months_with_data", len(snap["monthly_history"]))
+    per = snap["period"]
+    if per.get("baseline_chosen_by_you"):
+        story.append(Paragraph(f"Averages above use {per['averages_from']} to {per['averages_to']}, the period you chose.", small))
     story += [Paragraph("Income vs spending by month (last 12 months)", h2), _chart(hist)]
-    story.append(Paragraph(f"{have} of the last 12 months have data. Months marked * have no imported transactions; "
-                           "import older statements to fill them in. Partial first and last months can look low.", small))
+    shown = sum(1 for m in hist if not m.get("missing"))
+    story.append(Paragraph(f"{shown} of the 12 months shown have data ({have} months imported in all). Months marked * have no imported "
+                           "transactions. The first and last months can look low if they are partial.", small))
 
     story.append(Paragraph("Average monthly spending by category", h2))
     total = sum(snap["average_spending_by_category"].values()) or 1
@@ -224,6 +228,17 @@ def build_pdf(snap: dict, out: Path, narrative: str | None = None, narrative_lab
         if pos["pending_deposits"]:
             story.append(Paragraph(f"Not counted yet: {money(pos['pending_deposits'])} waiting to be deposited (would cover "
                                    f"{pos['months_covered_after_deposits']} months).", small))
+        tl = rc.get("income_timeline")
+        if tl:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("Your income timeline: pay, family support and the contract", h2))
+            story.append(_table([["Period", "Months", "Pay", "Family", "Spending", "Surplus", "Cash at end"]] +
+                                [[f"{p['start']} to {p['end']}", p["months"], money(p["pay"]), money(p["support"]), money(p["monthly_spending"]),
+                                  money(p["monthly_surplus"]), money(p["cash_at_end"])] for p in tl["phases"]],
+                                [1.5 * inch, 0.6 * inch, 0.8 * inch, 0.8 * inch, 0.9 * inch, 0.9 * inch, 1.0 * inch]))
+            if tl.get("months_cash_lasts_in_last_phase") is not None:
+                story.append(Paragraph(f"At the last period's pace your cash would last about {tl['months_cash_lasts_in_last_phase']} more months.", small))
+            story.append(Paragraph(tl["note"], small))
         story.append(Spacer(1, 6))
         story.append(Paragraph("If income stops (for example, a contract that does not convert)", h2))
         story.append(_table([["Months without income", "Cash needed", "Short today", "Short after deposits"]] +

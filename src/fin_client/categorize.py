@@ -25,6 +25,7 @@ DEFAULT_RULES: Rules = {
 
 BANK_CATEGORY_KEY = "_bank_categories"  # rules.json: {"_bank_categories": {"bank label": "Our Category"}}
 LABELS_KEY = "_labels"  # merchant key -> {category, source, confidence}
+AMOUNT_KEY = "_amount_rules"  # rules.json: [{"amount": 3500, "direction": "in", "match": "TRANSFER FROM", "category": "Family Support"}]
 USER_KEY = "_user"  # user keyword rules live here so they outrank the bank's label
 
 # Bank labels are looked up whole, then by their first segment ("Food/Alcohol" -> "food")
@@ -59,6 +60,7 @@ def load_rules() -> Rules:
     merged[LABELS_KEY] = labels_mod.load_default()
     if path.exists():
         user = json.loads(path.read_text(encoding="utf-8"))
+        merged[AMOUNT_KEY] = user.pop(AMOUNT_KEY, [])
         merged[BANK_CATEGORY_KEY] = {k.lower(): v for k, v in user.pop(BANK_CATEGORY_KEY, {}).items()}
         merged[USER_KEY] = {k: [s.upper() for s in v] for k, v in user.items()}
     return merged
@@ -71,6 +73,9 @@ def categorize(description: str, amount: Decimal, rules: Rules | None = None, ba
     for cat, kws in rules.get(USER_KEY, {}).items():  # type: ignore[union-attr]
         if any(k in d for k in kws):
             return cat
+    for ar in rules.get(AMOUNT_KEY, []):  # exact-amount rules, for things like a fixed monthly transfer from family
+        if abs(float(amount) - float(ar["amount"])) < 0.005 and (ar.get("direction") != "in" or amount > 0)                 and str(ar.get("match", "")).upper() in d:
+            return ar["category"]
     lab = rules.get(LABELS_KEY, {}).get(normalize(description))  # type: ignore[union-attr]
     if labels_mod.usable(lab):  # your merchant labels, then confident AI labels, then the bank's own category
         return lab["category"]  # type: ignore[index]

@@ -65,3 +65,18 @@ def test_snapshot_carries_window_and_recovery(tmp_path):
     snap = snapshot.build(t, DEFAULT_RULES, {}, conn)
     assert len(snap["history_window"]) == 12 and snap["months_with_data"] == 4
     assert snap["recovery"]["position"]["monthly_surplus"] == 1100
+
+
+def test_income_timeline_steps_down_with_family_support_and_contract_end():
+    prof = {"net_per_paycheck": 2000.0, "family_support": {"monthly": 3500, "through": "2026-11", "after_monthly": 1000},
+            "contract_ends": "2027-02"}
+    tl = recovery.income_timeline(prof, cash=5000.0, spending=4000.0, today=date(2026, 10, 17))
+    ph = tl["phases"]
+    pay = round(2000 * 26 / 12, 2)
+    assert [(p["start"], p["end"], p["months"]) for p in ph] == [("2026-11", "2026-11", 1), ("2026-12", "2027-02", 3), ("2027-03", "2027-10", 8)]
+    assert ph[0]["monthly_income"] == round(pay + 3500, 2) and ph[1]["monthly_income"] == round(pay + 1000, 2)
+    assert ph[2]["monthly_income"] == 1000 and ph[2]["pay"] == 0 and ph[2]["monthly_surplus"] == -3000
+    assert ph[0]["cash_at_end"] == round(5000 + pay + 3500 - 4000, 2)
+    assert tl["months_cash_lasts_in_last_phase"] is not None and tl["months_cash_lasts_in_last_phase"] > 0
+    assert recovery.income_timeline({}, 5000.0, 4000.0, date(2026, 10, 17)) is None
+    assert recovery._label(24324) == "2026-12" and recovery._label(24325) == "2027-01" and recovery._label(24312) == "2025-12"

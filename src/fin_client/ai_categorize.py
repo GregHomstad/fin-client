@@ -44,6 +44,7 @@ TAXONOMY = {
     "Alcohol & Tobacco": "liquor stores, tobacco, vape and smoke shops (bars and pubs are Dining)",
     "Savings & Investing": "deposits to savings, brokerage, retirement accounts",
     "Income": "paychecks, direct deposits, refunds, interest earned, reimbursements",
+    "Family Support": "regular money from family to help with living costs",
     "Taxes": "income tax, property tax, vehicle tax, tax preparers",
     "Other": "only when nothing above fits",
 }

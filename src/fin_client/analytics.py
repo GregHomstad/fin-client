@@ -6,6 +6,7 @@ from decimal import Decimal
 from fin_client.categorize import Rules, categorize
 from fin_client.models import Transaction
 
+INCOME_CATS = {"Income", "Family Support"}
 EXCLUDED = {"Transfers", "Savings & Investing"}  # internal movements and saving are not spending
 
 
@@ -34,7 +35,7 @@ def cashflow(txns: list[Transaction], rules: Rules | None = None) -> list[Month]
         if cat in EXCLUDED:
             continue
         m = months.setdefault(t.date.isoformat()[:7], Month(t.date.isoformat()[:7]))
-        if t.amount > 0 and cat != "Income" and cat != "Uncategorized":
+        if t.amount > 0 and cat not in INCOME_CATS and cat != "Uncategorized":
             m.spending -= t.amount  # a refund or return offsets the category it came from
             m.by_category[cat] -= t.amount
         elif t.amount > 0:
@@ -63,9 +64,9 @@ def window(months: list[Month], n: int = 12) -> list[dict]:
     return out
 
 
-def averages(months: list[Month]) -> dict[str, Decimal]:
+def averages(months: list[Month], trim: bool = True) -> dict[str, Decimal]:
     """Averages over full months; drops the first and last month if there are 3+ (likely partial)."""
-    use = months[1:-1] if len(months) >= 3 else months
+    use = (months[1:-1] if len(months) >= 3 else months) if trim else months
     if not use:
         return {}
     n = Decimal(len(use))

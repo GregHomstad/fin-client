@@ -20,8 +20,57 @@ def _ym_index(ym: str | None) -> int | None:
     return None if not ym else int(ym[:4]) * 12 + int(ym[5:7])
 
 
+def _idx(ym: str) -> int:
+    return int(ym[:4]) * 12 + int(ym[5:7])
+
+
+def _label(i: int) -> str:
+    m = i % 12 or 12
+    return f"{i // 12 if i % 12 else i // 12 - 1}-{m:02d}"
+
+
+def income_timeline(profile: dict, cash: float, spending: float | None, today: date) -> dict | None:
+    """Month-by-month cash under the income you described: pay, family support that steps down, a contract that may end."""
+    fs = profile.get("family_support") or {}
+    net = profile.get("net_per_paycheck")
+    if not (fs or net) or spending is None:
+        return None
+    take_home = float(net) * 26 / 12 if net else 0.0
+    now_i = today.year * 12 + today.month + 1  # index of next month (the plan starts there)
+    support_now = float(fs.get("monthly", 0))
+    support_after = float(fs.get("after_monthly", 0))
+    step_i = _idx(fs["through"]) + 1 if fs.get("through") else None            # first month at the lower support
+    end_i = _idx(profile["contract_ends"]) if profile.get("contract_ends") else None  # last month with pay
+    horizon = 12
+    rows, bal, cur = [], cash, None
+    for i in range(now_i, now_i + horizon):
+        support = support_after if (step_i is not None and i >= step_i) else support_now
+        pay = take_home if (end_i is None or i <= end_i) else 0.0
+        key = (round(pay, 2), round(support, 2))
+        if cur is None or cur["key"] != key:
+            cur = {"key": key, "start": _label(i), "months": 0, "monthly_income": round(pay + support, 2), "pay": round(pay, 2),
+                   "support": round(support, 2)}
+            rows.append(cur)
+        cur["months"] += 1
+        cur["end"] = _label(i)
+        bal += pay + support - spending
+        cur["cash_at_end"] = round(bal, 2)
+    for r in rows:
+        r.pop("key")
+        r["monthly_spending"] = round(spending, 2)
+        r["monthly_surplus"] = round(r["monthly_income"] - spending, 2)
+    last = rows[-1]
+    runs_out = None
+    if last["monthly_surplus"] < 0:
+        before = last["cash_at_end"] - last["months"] * last["monthly_surplus"]
+        runs_out = round(max(before, 0) / -last["monthly_surplus"], 1)
+    note = ("Spending is what your imported accounts show since your chosen start month. Card spending that isn't imported yet "
+            "is missing, so real surpluses are lower.")
+    return {"phases": rows, "months_cash_lasts_in_last_phase": runs_out, "starting_cash": round(cash, 2), "note": note}
+
+
 def build(surplus: float, essential: float, cat_avg: dict[str, float], accts: list[dict], goal_rows: list[dict],
-          profile: dict, today: date | None = None) -> dict:
+          profile: dict, today: date | None = None, spending: float | None = None) -> dict:
     today = today or date.today()
     nw = accounts.net_worth(accts)
     prefunded = accounts.prefunded_debts(accts)
@@ -50,6 +99,10 @@ def build(surplus: float, essential: float, cat_avg: dict[str, float], accts: li
     }
     if unknown_min:
         out["notes"].append("Minimum payment unknown for: " + ", ".join(unknown_min) + ". Treated as $0 here; add them for a true figure.")
+
+    tl = income_timeline(profile, cash + pending, spending, today)
+    if tl:
+        out["income_timeline"] = tl
 
     # --- if income stops (e.g. a contract that does not convert); unemployment benefits are not assumed
     out["income_stops"] = [{
