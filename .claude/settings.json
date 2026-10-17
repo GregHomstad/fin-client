@@ -1,7 +1,9 @@
 {
   "permissions": {
     "deny": [
+      "Read(//c/Users/gregh/.fin-client/**)",
       "Read(//c/Users/gregh/AppData/Local/fin-client/**)",
+      "Read(//c/Users/gregh/AppData/Local/Packages/**/fin-client/**)",
       "Read(~/.local/share/fin-client/**)",
       "Read(./data/**)",
       "Read(./private/**)",

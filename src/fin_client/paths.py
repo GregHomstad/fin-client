@@ -11,7 +11,9 @@ def data_dir() -> Path:
     if override:
         base = Path(override)
     elif sys.platform == "win32":
-        base = Path(os.environ["LOCALAPPDATA"]) / "fin-client"
+        # Not %LOCALAPPDATA%: Windows redirects AppData per packaged app, so a shell and the Claude desktop
+        # app can silently see different copies. The home folder root is shared and never cloud-synced.
+        base = Path.home() / ".fin-client"
     else:
         base = Path.home() / ".local" / "share" / "fin-client"
     base = base.resolve()
