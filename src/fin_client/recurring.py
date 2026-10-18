@@ -69,29 +69,50 @@ def _same_biller(a: str, b: str) -> bool:
     return bool({w for w in a.split() if len(w) >= 5 and w not in GENERIC} & {w for w in b.split() if len(w) >= 5 and w not in GENERIC})
 
 
+def _tokens(key: str) -> set[str]:
+    """Words that can make two descriptions the same biller: the last word and any distinctive word."""
+    toks = {w for w in key.split() if len(w) >= 5 and w not in GENERIC}
+    if _tail(key):
+        toks.add(_tail(key))
+    return toks
+
+
+def _try_merge(merged: dict, a: tuple, b: tuple) -> bool:
+    ga, gb = sorted(merged[a], key=lambda t: t.date), sorted(merged[b], key=lambda t: t.date)
+    ma, mb = median([t.amount for t in ga]), median([t.amount for t in gb])
+    if not ma or abs(ma - mb) > abs(ma) * Decimal("0.15"):
+        return False
+    first, second = (ga, gb) if ga[0].date <= gb[0].date else (gb, ga)
+    if first[-1].date <= second[0].date and (second[0].date - first[-1].date).days <= 60:
+        merged[a] = ga + gb
+        del merged[b]
+        return True
+    return False
+
+
 def _merge_aliases(groups: dict[tuple[str, bool], list[Transaction]]) -> dict[tuple[str, bool], list[Transaction]]:
     """A biller can change how it shows up (a new payment channel, a web reference instead of your name).
 
-    Groups with the same last word, similar amounts and date ranges that follow each other are one recurring payment.
+    Groups sharing a distinctive word or the same last word, with similar amounts and date ranges that follow each other,
+    are one recurring payment. Candidates come from a word index, so this stays fast with thousands of merchants.
     """
     merged = dict(groups)
     changed = True
     while changed:
         changed = False
-        keys = list(merged)
-        for i, a in enumerate(keys):
-            for b in keys[i + 1:]:
-                if a not in merged or b not in merged or a[1] != b[1] or not _same_biller(a[0], b[0]):
-                    continue
-                ga, gb = sorted(merged[a], key=lambda t: t.date), sorted(merged[b], key=lambda t: t.date)
-                ma, mb = median([t.amount for t in ga]), median([t.amount for t in gb])
-                if not ma or abs(ma - mb) > abs(ma) * Decimal("0.15"):
-                    continue
-                first, second = (ga, gb) if ga[0].date <= gb[0].date else (gb, ga)
-                if first[-1].date <= second[0].date and (second[0].date - first[-1].date).days <= 60:
-                    merged[a] = ga + gb
-                    del merged[b]
-                    changed = True
+        index: dict[tuple[str, bool], list[tuple]] = defaultdict(list)
+        for k in merged:
+            for tok in _tokens(k[0]):
+                index[(tok, k[1])].append(k)
+        for keys in index.values():
+            if len(keys) < 2 or len(keys) > 40:  # a word shared by dozens of merchants is not a biller name
+                continue
+            for i, a in enumerate(keys):
+                for b in keys[i + 1:]:
+                    if a in merged and b in merged and _try_merge(merged, a, b):
+                        changed = True
+                        break
+                if changed:
                     break
             if changed:
                 break
